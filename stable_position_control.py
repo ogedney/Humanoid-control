@@ -2,6 +2,7 @@ import pybullet as pb
 import pybullet_data
 import time
 import numpy as np
+from helpers import setup_camera_controls
 
 def main():
     try:
@@ -12,6 +13,10 @@ def main():
         # Configure visualization
         pb.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1)
         pb.configureDebugVisualizer(pb.COV_ENABLE_GUI, 1)
+        # Explicitly disable wireframe mode to avoid visualization issues
+        pb.configureDebugVisualizer(pb.COV_ENABLE_WIREFRAME, 0)
+        # Disable keyboard shortcuts to prevent wireframe toggle
+        pb.configureDebugVisualizer(pb.COV_ENABLE_KEYBOARD_SHORTCUTS, 0)
         
         # Configure physics for stability
         pb.setAdditionalSearchPath(pybullet_data.getDataPath())
@@ -29,13 +34,19 @@ def main():
                               flags=pb.URDF_MAINTAIN_LINK_ORDER)
         print(f"Loaded humanoid robot, ID: {robotId}")
         
-        # Set camera view
+        # Set initial camera view
         pb.resetDebugVisualizerCamera(
             cameraDistance=3.0,
             cameraYaw=45,
             cameraPitch=-30,
             cameraTargetPosition=[0, 0, 1.0]
         )
+        
+        # Setup interactive camera controls from helpers.py
+        # The modified version has W key for forward movement only, no wireframe toggle
+        update_camera = setup_camera_controls()
+        print("Camera controls enabled: Arrow keys to rotate, +/- to zoom, WASD to pan, Q/E for up/down")
+        print("NOTE: W key is for camera movement only, wireframe toggle disabled")
         
         # Get joint information
         joint_indices = []
@@ -82,6 +93,9 @@ def main():
         
         # Main simulation loop
         for i in range(10000):
+            # Update camera based on user input
+            update_camera()
+            
             # Check if robot is still stable
             try:
                 pos, _ = pb.getBasePositionAndOrientation(robotId)
@@ -128,6 +142,12 @@ def main():
             
             # Sleep to make it real-time
             time.sleep(1./240.)
+            
+            # Check for quit key - use 'x' instead of 'q' to avoid conflicts
+            keys = pb.getKeyboardEvents()
+            if ord('x') in keys and keys[ord('x')] & pb.KEY_WAS_TRIGGERED:
+                print("X key pressed, exiting")
+                break
         
         print("Simulation completed successfully")
     except Exception as e:

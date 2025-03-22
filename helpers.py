@@ -57,8 +57,7 @@ def setup_camera_controls():
         forward = np.array([-math.cos(yaw_rad), math.sin(yaw_rad), 0])
         right = np.array([math.sin(yaw_rad), math.cos(yaw_rad), 0])
         
-        # Removed wireframe toggle to avoid visualization issues
-        
+        # WASD controls are ONLY for camera movement (no wireframe toggle)
         if ord('w') in keys and keys[ord('w')] & pb.KEY_IS_DOWN:  # Forward
             target += forward * pan_speed
         if ord('s') in keys and keys[ord('s')] & pb.KEY_IS_DOWN:  # Backward
@@ -123,7 +122,7 @@ def setup_simulation_environment():
     pb.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1)
     pb.configureDebugVisualizer(pb.COV_ENABLE_GUI, 1)  # Ensure GUI is enabled
     pb.configureDebugVisualizer(pb.COV_ENABLE_WIREFRAME, 0)
-    pb.configureDebugVisualizer(pb.COV_ENABLE_KEYBOARD_SHORTCUTS, 0)
+    pb.configureDebugVisualizer(pb.COV_ENABLE_KEYBOARD_SHORTCUTS, 0)  # Disable keyboard shortcuts including wireframe toggle
     
     # Setup physics parameters
     pb.setAdditionalSearchPath(pybullet_data.getDataPath())
