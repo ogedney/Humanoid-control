@@ -2,6 +2,7 @@ import pybullet as pb
 import math
 import pybullet_data
 import numpy as np
+import time
 
 def setup_camera_controls():
     """
@@ -83,111 +84,101 @@ def setup_camera_controls():
     
     return update_camera 
 
-def get_atlas_initial_pose():
+def setup_humanoid_for_control():
     """
-    Returns a dictionary of initial joint positions for the humanoid robot
-    to achieve a stable standing pose.
+    Sets up the PyBullet simulation and prepares a humanoid robot specifically for position control.
+    
+    This function:
+    1. Initializes PyBullet with GUI
+    2. Configures visualization settings
+    3. Sets up physics parameters for stability
+    4. Loads the ground plane and humanoid robot
+    5. Sets up camera view and controls
+    6. Prepares joints with appropriate damping for stable control
+    7. Lets the robot settle initially
+    
+    Returns:
+        tuple: (physicsClient, robotId, joint_indices, joint_names, update_camera)
+            - physicsClient: PyBullet physics client ID
+            - robotId: ID of the loaded humanoid robot
+            - joint_indices: List of indices for controllable joints
+            - joint_names: List of names for controllable joints
+            - update_camera: Function to update camera based on user input
     """
-    return {
-        "waist": 0.0,
-        "chest": 0.0,
-        "neck": 0.0,
-        "right_hip_x": 0.0,
-        "right_hip_z": 0.0,
-        "right_hip_y": 0.0,
-        "right_knee": 0.0,
-        "right_ankle": 0.0,
-        "right_shoulder1": 0.0,
-        "right_shoulder2": 0.0,
-        "right_elbow": 0.0,
-        "left_hip_x": 0.0,
-        "left_hip_z": 0.0,
-        "left_hip_y": 0.0,
-        "left_knee": 0.0,
-        "left_ankle": 0.0,
-        "left_shoulder1": 0.0,
-        "left_shoulder2": 0.0,
-        "left_elbow": 0.0
-    }
-
-def setup_simulation_environment():
-    """
-    Sets up the PyBullet simulation environment with a plane and humanoid.
-    Returns the IDs for the created objects and applies initial pose to the humanoid.
-    """
-    # Connect to the physics server
+    # Connect to PyBullet with GUI
     physicsClient = pb.connect(pb.GUI)
+    print("Connected to PyBullet")
     
-    # Configure visualizer
+    # Configure visualization
     pb.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1)
-    pb.configureDebugVisualizer(pb.COV_ENABLE_GUI, 1)  # Ensure GUI is enabled
-    pb.configureDebugVisualizer(pb.COV_ENABLE_WIREFRAME, 0)
-    pb.configureDebugVisualizer(pb.COV_ENABLE_KEYBOARD_SHORTCUTS, 0)  # Disable keyboard shortcuts including wireframe toggle
+    pb.configureDebugVisualizer(pb.COV_ENABLE_GUI, 1)
+    pb.configureDebugVisualizer(pb.COV_ENABLE_WIREFRAME, 0)  # Explicitly disable wireframe
+    pb.configureDebugVisualizer(pb.COV_ENABLE_KEYBOARD_SHORTCUTS, 0)  # Disable keyboard shortcuts
     
-    # Setup physics parameters
+    # Configure physics for stability
     pb.setAdditionalSearchPath(pybullet_data.getDataPath())
     pb.setGravity(0, 0, -9.8)
-    pb.setTimeStep(1./240.)
-    pb.setRealTimeSimulation(0)
+    pb.setPhysicsEngineParameter(fixedTimeStep=1/240.0, numSolverIterations=10, numSubSteps=1)
     
-    # Setup ground plane
+    # Load ground plane
     planeId = pb.loadURDF("plane.urdf")
-    pb.changeDynamics(planeId, -1, lateralFriction=1.0, restitution=0.0)
+    print("Loaded ground plane")
     
-    # Setup humanoid at a lower height to prevent falling
-    startPos = [0, 0, 1.1]  # Start closer to the ground
-    startOrientation = pb.getQuaternionFromEuler([0, 0, 0])  # No rotation initially
+    # Load humanoid robot
+    startPos = [0, 0, 3.5]  # Lower starting position to avoid falling
+    startOrientation = pb.getQuaternionFromEuler([np.pi/2, 0, 0])  # -90 degrees around Y axis to stand upright
+    robotId = pb.loadURDF("humanoid/humanoid.urdf", startPos, startOrientation,
+                         flags=pb.URDF_MAINTAIN_LINK_ORDER)
+    print(f"Loaded humanoid robot, ID: {robotId}")
     
-    # Load humanoid model
-    humanoidId = pb.loadURDF("humanoid/humanoid.urdf", startPos, startOrientation, 
-                            flags=pb.URDF_USE_SELF_COLLISION | pb.URDF_MAINTAIN_LINK_ORDER)
-    
-    # Setup joint damping for stability
-    num_joints = pb.getNumJoints(humanoidId)
-    for joint in range(num_joints):
-        info = pb.getJointInfo(humanoidId, joint)
-        joint_type = info[2]
-        
-        # Only adjust controllable joints
-        if joint_type != pb.JOINT_FIXED:
-            pb.changeDynamics(humanoidId, 
-                             joint,
-                             jointDamping=1.0,  # Increased damping
-                             angularDamping=1.0,
-                             linearDamping=0.8,
-                             lateralFriction=0.5)
-    
-    # Reset to default pose first
-    initial_pose = get_atlas_initial_pose()
-    for joint in range(num_joints):
-        info = pb.getJointInfo(humanoidId, joint)
-        joint_name = info[1].decode('utf-8')
-        if joint_name in initial_pose:
-            pb.resetJointState(humanoidId, joint, initial_pose[joint_name])
-    
-    # Allow the robot to settle with position control
-    for _ in range(100):
-        # Apply position control to each joint to hold pose
-        for joint in range(num_joints):
-            info = pb.getJointInfo(humanoidId, joint)
-            joint_name = info[1].decode('utf-8')
-            if joint_name in initial_pose:
-                pb.setJointMotorControl2(
-                    bodyUniqueId=humanoidId,
-                    jointIndex=joint,
-                    controlMode=pb.POSITION_CONTROL,
-                    targetPosition=initial_pose[joint_name],
-                    maxVelocity=1.0,
-                    force=200.0
-                )
-        pb.stepSimulation()
-    
-    # Set a better initial camera view
+    # Set initial camera view
     pb.resetDebugVisualizerCamera(
-        cameraDistance=5.0,
+        cameraDistance=3.0,
         cameraYaw=45,
         cameraPitch=-30,
         cameraTargetPosition=[0, 0, 1.0]
     )
     
-    return physicsClient, planeId, humanoidId 
+    # Setup interactive camera controls
+    update_camera = setup_camera_controls()
+    print("Camera controls enabled: Arrow keys to rotate, +/- to zoom, WASD to pan, Q/E for up/down")
+    print("NOTE: W key is for camera movement only, wireframe toggle disabled")
+    
+    # Get joint information
+    joint_indices = []
+    joint_names = []
+    
+    for i in range(pb.getNumJoints(robotId)):
+        info = pb.getJointInfo(robotId, i)
+        joint_type = info[2]
+        
+        if joint_type != pb.JOINT_FIXED:
+            joint_indices.append(i)
+            joint_names.append(info[1].decode('utf-8'))
+            print(f"Joint {i}: {info[1].decode('utf-8')}")
+            
+            # Add damping for stability
+            pb.changeDynamics(
+                robotId, 
+                i, 
+                jointDamping=5.0,  # Strong damping for position control
+                linearDamping=0.9,
+                angularDamping=0.9,
+                maxJointVelocity=10.0  # Limit velocity
+            )
+            
+            # Reset joint state to zeros with zero velocity
+            pb.resetJointState(robotId, i, 0, 0)
+    
+    # Wait for visualization to initialize
+    time.sleep(1.0)
+    print("Environment setup complete")
+    
+    # Small early stabilization period without control to let it settle
+    print("Initial stabilization period...")
+    for i in range(100):
+        pb.stepSimulation()
+        time.sleep(1/240.0)
+    
+    print("Setup complete - robot ready for control")
+    return physicsClient, robotId, joint_indices, joint_names, update_camera 
