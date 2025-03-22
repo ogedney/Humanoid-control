@@ -7,6 +7,9 @@ from control import HumanoidController
 # Setup simulation and get object IDs
 physicsClient, planeId, humanoidId = setup_simulation_environment()
 
+# Give the GUI time to initialize properly 
+time.sleep(0.5)
+
 # Initialize the controller
 controller = HumanoidController(humanoidId)
 
@@ -14,7 +17,6 @@ controller = HumanoidController(humanoidId)
 states_history = []
 
 # Set initial standing pose for Atlas
-# Get the initial joint positions from helpers for target positions
 target_positions = np.zeros(controller.num_controlled_joints)
 joint_name_to_target = get_atlas_initial_pose()
 
@@ -25,23 +27,23 @@ for i, name in enumerate(controller.joint_names):
 
 camera_updater = setup_camera_controls()
 
-# PD control parameters for Atlas
-kp = 500.0  # Higher proportional gain for Atlas
-kd = 50.0   # Higher derivative gain for Atlas
+# Control parameters - more gentle for position control
+kp = 400.0  # Position gain
+kd = 40.0   # Velocity gain
 
+# Let the simulation run
 for i in range(10000):
+    # Update camera and controller state
     camera_updater()
-    
-    # Update state
     controller.update_state()
     
-    # Compute and apply torques using PD control with gravity compensation
-    torques = controller.compute_pd_torques(target_positions, kp=kp, kd=kd)
-    controller.apply_torques(torques)
+    # Use position control to maintain pose
+    controller.set_positions(target_positions, kp=kp, kd=kd)
     
-    # Store the state
+    # Record state history
     states_history.append(controller.get_all_states())
     
+    # Step simulation
     pb.stepSimulation()
     time.sleep(1./240.)
 
