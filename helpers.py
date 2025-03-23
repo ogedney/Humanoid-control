@@ -182,3 +182,36 @@ def setup_humanoid_for_control():
     
     print("Setup complete - robot ready for control")
     return physicsClient, robotId, joint_indices, joint_names, update_camera 
+
+def reset_humanoid(robot_id):
+    """
+    Resets the humanoid robot to its initial position and orientation.
+    
+    Args:
+        robot_id: PyBullet ID of the humanoid robot
+        
+    Returns:
+        None
+    """
+    # Initial position and orientation
+    start_pos = [0, 0, 3.5]
+    start_orientation = pb.getQuaternionFromEuler([np.pi/2, 0, 0])
+    
+    # Reset base position and orientation
+    pb.resetBasePositionAndOrientation(robot_id, start_pos, start_orientation)
+    
+    # Reset joint states to zero position and velocity
+    for i in range(pb.getNumJoints(robot_id)):
+        joint_info = pb.getJointInfo(robot_id, i)
+        joint_type = joint_info[2]
+        
+        if joint_type != pb.JOINT_FIXED:
+            pb.resetJointState(robot_id, i, 0, 0)
+    
+    # Allow a short stabilization period
+    for _ in range(10):
+        pb.stepSimulation()
+        
+    print("Robot reset to initial position")
+    
+    return
