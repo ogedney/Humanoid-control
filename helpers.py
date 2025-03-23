@@ -25,10 +25,10 @@ def setup_camera_controls():
             # ... rest of simulation loop
     """
     # Initial camera settings
-    camera_distance = 6.0  # Increased for better initial view
+    camera_distance = 7.0
     camera_yaw = 45
-    camera_pitch = -30  # Adjusted for better viewing angle
-    target = [0, 0, 1.0]  # [x, y, z] - Set z to 1.0 to look at approximate COM height
+    camera_pitch = -30
+    target = [0, 0, 2.0]
 
     def update_camera():
         keys = pb.getKeyboardEvents()
@@ -125,8 +125,8 @@ def setup_humanoid_for_control():
     print("Loaded ground plane")
     
     # Load humanoid robot
-    startPos = [0, 0, 3.5]  # Lower starting position to avoid falling
-    startOrientation = pb.getQuaternionFromEuler([np.pi/2, 0, 0])  # -90 degrees around Y axis to stand upright
+    startPos = [0, 0, 3.5]
+    startOrientation = pb.getQuaternionFromEuler([np.pi/2, 0, 0])
     robotId = pb.loadURDF("humanoid/humanoid.urdf", startPos, startOrientation,
                          flags=pb.URDF_MAINTAIN_LINK_ORDER)
     print(f"Loaded humanoid robot, ID: {robotId}")
@@ -161,10 +161,10 @@ def setup_humanoid_for_control():
             pb.changeDynamics(
                 robotId, 
                 i, 
-                jointDamping=5.0,  # Strong damping for position control
+                jointDamping=5.0,
                 linearDamping=0.9,
                 angularDamping=0.9,
-                maxJointVelocity=10.0  # Limit velocity
+                maxJointVelocity=10.0
             )
             
             # Reset joint state to zeros with zero velocity
@@ -175,10 +175,10 @@ def setup_humanoid_for_control():
     print("Environment setup complete")
     
     # Small early stabilization period without control to let it settle
-    print("Initial stabilization period...")
-    for i in range(100):
-        pb.stepSimulation()
-        time.sleep(1/240.0)
+    # print("Initial stabilization period...")
+    # for i in range(100):
+    #     pb.stepSimulation()
+    #     time.sleep(1/240.0)
     
     print("Setup complete - robot ready for control")
     return physicsClient, robotId, joint_indices, joint_names, update_camera 

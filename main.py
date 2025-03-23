@@ -2,21 +2,27 @@ import pybullet as pb
 import time
 import numpy as np
 from helpers import setup_humanoid_for_control
+from controllers import create_controller
 
 def main():
     try:
         # Setup environment and get necessary components
         physicsClient, robotId, joint_indices, joint_names, update_camera = setup_humanoid_for_control()
         
-        # Position control parameters
-        kp = 0.3  # Very low gains for stability
-        kd = 0.5  # Higher damping than position gain
-        max_force = 20.0  # Low force to avoid instability
+        # Create a controller 
+        controller_type = 'torque'
+        controller = create_controller(
+            controller_type=controller_type,
+            robot_id=robotId,
+            joint_indices=joint_indices,
+            joint_names=joint_names,
+            max_force=20.0
+        )
         
         # Set target positions (all zeros)
-        target_positions = np.zeros(len(joint_indices))
+        controller.set_target_positions(np.zeros(len(joint_indices)))
         
-        print("Starting simulation with position control...")
+        print(f"Starting simulation with {controller_type} control...")
         
         # Main simulation loop
         for i in range(10000):
@@ -37,32 +43,8 @@ def main():
                 print(f"ERROR: Could not get robot position: {e}")
                 break
             
-            # Apply position control to all joints with very conservative parameters
-            for j, joint_idx in enumerate(joint_indices):
-                try:
-                    # Get current joint state
-                    joint_state = pb.getJointState(robotId, joint_idx)
-                    current_pos = joint_state[0]
-                    current_vel = joint_state[1]
-                    
-                    # Very small step towards target
-                    if abs(current_pos - target_positions[j]) > 0.01:
-                        # Only move a tiny bit toward target each step
-                        direction = 1 if target_positions[j] > current_pos else -1
-                        target_this_step = current_pos + direction * 0.001
-                        
-                        pb.setJointMotorControl2(
-                            bodyUniqueId=robotId,
-                            jointIndex=joint_idx,
-                            controlMode=pb.POSITION_CONTROL,
-                            targetPosition=target_this_step,  # Incremental movement
-                            positionGain=kp,
-                            velocityGain=kd,
-                            force=max_force
-                        )
-                except Exception as e:
-                    print(f"ERROR at joint {joint_idx}: {e}")
-                    continue
+            # Update controller
+            controller.update()
             
             # Step simulation 
             pb.stepSimulation()
