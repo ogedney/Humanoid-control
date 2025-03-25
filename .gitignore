@@ -35,6 +35,7 @@ coverage.xml
 # IDE specific files
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 
