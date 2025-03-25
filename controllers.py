@@ -271,7 +271,8 @@ class PPONetwork(nn.Module):
         
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
-            nn.init.orthogonal_(module.weight, gain=0.1)
+            # Initialize with larger weights to encourage more movement
+            nn.init.orthogonal_(module.weight, gain=100)
             nn.init.zeros_(module.bias)
     
     def forward(self, x):
@@ -283,7 +284,8 @@ class PPONetwork(nn.Module):
         
         # Policy
         action_mean = self.policy_mean(shared_features)
-        action_log_std = self.policy_log_std.expand_as(action_mean)
+        # Initialize with larger standard deviation to encourage exploration
+        action_log_std = torch.ones_like(action_mean) * 0.5
         action_std = torch.exp(action_log_std)
         
         # Value
@@ -299,7 +301,7 @@ class PPOController(Controller):
                  hidden_dim=64, learning_rate=3e-4, batch_size=64, 
                  clip_param=0.2, gamma=0.99, lambd=0.95, 
                  value_coef=0.5, entropy_coef=0.01, max_buffer_size=4000,
-                 model_dir="ppo_models"):
+                 model_dir="ppo_models", skip_load=False):
         """
         Initialize the PPO controller.
         
@@ -318,9 +320,11 @@ class PPOController(Controller):
             entropy_coef: Entropy coefficient
             max_buffer_size: Maximum size of the experience buffer
             model_dir: Directory to save models
+            skip_load: If True, start with a fresh model instead of loading existing one
         """
         super().__init__(robot_id, joint_indices, joint_names)
-        self.max_force = max_force
+        # Increase max force significantly for more movement
+        self.max_force = max_force * 5.0
         
         # PPO parameters
         self.clip_param = clip_param
@@ -332,7 +336,7 @@ class PPOController(Controller):
         
         # State and action dimensions
         self.joint_dim = len(joint_indices)
-        self.state_dim = self.joint_dim * 2 + 6  # joint pos/vel + base pos/ori
+        self.state_dim = self.joint_dim * 2 + 7  # joint pos/vel + base pos (3) + base ori (4)
         self.action_dim = self.joint_dim
         
         # Create network and optimizer
@@ -371,8 +375,17 @@ class PPOController(Controller):
         self.episode_length = 0
         self.best_reward = -float("inf")
         
-        # Load model if it exists
-        self.load_model()
+        # Track reward components
+        self.episode_forward_reward = 0
+        self.episode_height_penalty = 0
+        self.episode_energy_penalty = 0
+        self.episode_velocity_reward = 0
+        
+        # Load model if it exists and skip_load is False
+        if not skip_load:
+            self.load_model()
+        else:
+            print("Starting with fresh model")
         
     def get_state(self):
         """
@@ -410,8 +423,8 @@ class PPOController(Controller):
         Returns:
             float: The reward value
         """
-        # Get current base position
-        current_base_pos, _ = pb.getBasePositionAndOrientation(self.robot_id)
+        # Get current base position and orientation
+        current_base_pos, current_base_orn = pb.getBasePositionAndOrientation(self.robot_id)
         current_base_pos = np.array(current_base_pos)
         
         # Initialize previous position if needed
@@ -419,20 +432,28 @@ class PPOController(Controller):
             self.prev_base_pos = current_base_pos
             return 0.0
         
-        # Forward movement reward (x-axis)
-        forward_reward = (current_base_pos[0] - self.prev_base_pos[0]) * 10.0
+        # Forward movement reward (x-axis) - significantly increased reward
+        forward_reward = (current_base_pos[0] - self.prev_base_pos[0]) * 200.0  # Increased from 50 to 200
+        self.episode_forward_reward += forward_reward
         
         # Height penalty if too low (fallen)
-        height_penalty = -10.0 if current_base_pos[2] < 1.5 else 0.0
+        height_penalty = -50.0 if current_base_pos[2] < 1.5 else 0.0
+        self.episode_height_penalty += height_penalty
         
-        # Energy efficiency penalty (small penalty for joint torques)
-        energy_penalty = -0.0005 * torch.sum(torch.abs(self.latest_actions)).item()
+        # Energy efficiency penalty (very small penalty)
+        energy_penalty = -0.000001 * torch.sum(torch.abs(self.latest_actions)).item()
+        self.episode_energy_penalty += energy_penalty
+        
+        # Add reward for forward velocity
+        forward_velocity = (current_base_pos[0] - self.prev_base_pos[0]) / (1/240.0)  # velocity in m/s
+        velocity_reward = 0.1 * abs(forward_velocity)  # Reward for any forward velocity
+        self.episode_velocity_reward += velocity_reward
         
         # Update previous position
         self.prev_base_pos = current_base_pos
         
         # Combine rewards
-        reward = forward_reward + height_penalty + energy_penalty
+        reward = forward_reward + height_penalty + energy_penalty + velocity_reward
         
         return reward
     
@@ -466,15 +487,18 @@ class PPOController(Controller):
         with torch.no_grad():
             action_mean, action_std, value = self.network(state)
         
-        # Create normal distribution
-        dist = Normal(action_mean, action_std)
+        # Create normal distribution with larger standard deviation for exploration
+        dist = Normal(action_mean, action_std * 3.0)  # Increased from 2.0 to 3.0
         
         # Sample action and get log probability
         action = dist.sample()
         log_prob = dist.log_prob(action).sum()
         
-        # Clip actions to valid range
+        # Clip actions to valid range with a minimum threshold
         action_clipped = torch.clamp(action, -self.max_force, self.max_force)
+        
+        # Add larger random noise to encourage exploration
+        action_clipped += torch.randn_like(action_clipped) * 2.0  # Increased from 0.5 to 2.0
         
         return action_clipped, log_prob, value.item()
     
@@ -534,6 +558,12 @@ class PPOController(Controller):
             self.episode_reward = 0
             self.episode_length = 0
             self.prev_base_pos = None
+            
+            # Reset reward components
+            self.episode_forward_reward = 0
+            self.episode_height_penalty = 0
+            self.episode_energy_penalty = 0
+            self.episode_velocity_reward = 0
             
             # Reset humanoid position for the next episode
             reset_humanoid(self.robot_id)

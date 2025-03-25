@@ -84,18 +84,58 @@ def setup_camera_controls():
     
     return update_camera 
 
-def setup_humanoid_for_control():
+def add_coordinate_frame():
+    """
+    Add a coordinate frame visualization to the simulation.
+    
+    Creates three colored lines at the origin (0,0,0):
+    - Red line: X-axis (forward/backward direction)
+    - Green line: Y-axis (left/right direction)
+    - Blue line: Z-axis (up/down direction)
+    """
+    # Create a small coordinate frame (1 meter long)
+    length = 1.0
+    thickness = 0.02
+    
+    # X-axis (red)
+    pb.addUserDebugLine(
+        lineFromXYZ=[0, 0, 0],
+        lineToXYZ=[length, 0, 0],
+        lineColorRGB=[1, 0, 0],
+        lineWidth=thickness
+    )
+    
+    # Y-axis (green)
+    pb.addUserDebugLine(
+        lineFromXYZ=[0, 0, 0],
+        lineToXYZ=[0, length, 0],
+        lineColorRGB=[0, 1, 0],
+        lineWidth=thickness
+    )
+    
+    # Z-axis (blue)
+    pb.addUserDebugLine(
+        lineFromXYZ=[0, 0, 0],
+        lineToXYZ=[0, 0, length],
+        lineColorRGB=[0, 0, 1],
+        lineWidth=thickness
+    )
+
+def setup_humanoid_for_control(use_gui=True):
     """
     Sets up the PyBullet simulation and prepares a humanoid robot specifically for position control.
     
     This function:
-    1. Initializes PyBullet with GUI
+    1. Initializes PyBullet with or without GUI
     2. Configures visualization settings
     3. Sets up physics parameters for stability
     4. Loads the ground plane and humanoid robot
-    5. Sets up camera view and controls
+    5. Sets up camera view and controls (if GUI is enabled)
     6. Prepares joints with appropriate damping for stable control
     7. Lets the robot settle initially
+    
+    Args:
+        use_gui (bool): Whether to run with GUI visualization (default: True)
     
     Returns:
         tuple: (physicsClient, robotId, joint_indices, joint_names, update_camera)
@@ -103,17 +143,21 @@ def setup_humanoid_for_control():
             - robotId: ID of the loaded humanoid robot
             - joint_indices: List of indices for controllable joints
             - joint_names: List of names for controllable joints
-            - update_camera: Function to update camera based on user input
+            - update_camera: Function to update camera based on user input (None if GUI is disabled)
     """
-    # Connect to PyBullet with GUI
-    physicsClient = pb.connect(pb.GUI)
-    print("Connected to PyBullet")
+    # Connect to PyBullet with or without GUI
+    if use_gui:
+        physicsClient = pb.connect(pb.GUI)
+        print("Connected to PyBullet with GUI")
+    else:
+        physicsClient = pb.connect(pb.DIRECT)
+        print("Connected to PyBullet without GUI")
     
     # Configure visualization
-    pb.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1)
-    pb.configureDebugVisualizer(pb.COV_ENABLE_GUI, 1)
-    pb.configureDebugVisualizer(pb.COV_ENABLE_WIREFRAME, 0)  # Explicitly disable wireframe
-    pb.configureDebugVisualizer(pb.COV_ENABLE_KEYBOARD_SHORTCUTS, 0)  # Disable keyboard shortcuts
+    pb.configureDebugVisualizer(pb.COV_ENABLE_RENDERING, 1 if use_gui else 0)
+    pb.configureDebugVisualizer(pb.COV_ENABLE_GUI, 1 if use_gui else 0)
+    pb.configureDebugVisualizer(pb.COV_ENABLE_WIREFRAME, 0)
+    pb.configureDebugVisualizer(pb.COV_ENABLE_KEYBOARD_SHORTCUTS, 0)
     
     # Configure physics for stability
     pb.setAdditionalSearchPath(pybullet_data.getDataPath())
@@ -124,6 +168,11 @@ def setup_humanoid_for_control():
     planeId = pb.loadURDF("plane.urdf")
     print("Loaded ground plane")
     
+    # Add coordinate frame visualization only if GUI is enabled
+    if use_gui:
+        add_coordinate_frame()
+        print("Added coordinate frame visualization")
+    
     # Load humanoid robot
     startPos = [0, 0, 3.5]
     startOrientation = pb.getQuaternionFromEuler([np.pi/2, 0, 0])
@@ -131,18 +180,18 @@ def setup_humanoid_for_control():
                          flags=pb.URDF_MAINTAIN_LINK_ORDER)
     print(f"Loaded humanoid robot, ID: {robotId}")
     
-    # Set initial camera view
-    pb.resetDebugVisualizerCamera(
-        cameraDistance=3.0,
-        cameraYaw=45,
-        cameraPitch=-30,
-        cameraTargetPosition=[0, 0, 1.0]
-    )
-    
-    # Setup interactive camera controls
-    update_camera = setup_camera_controls()
-    print("Camera controls enabled: Arrow keys to rotate, +/- to zoom, WASD to pan, Q/E for up/down")
-    print("NOTE: W key is for camera movement only, wireframe toggle disabled")
+    # Set initial camera view and setup camera controls only if GUI is enabled
+    update_camera = None
+    if use_gui:
+        pb.resetDebugVisualizerCamera(
+            cameraDistance=3.0,
+            cameraYaw=45,
+            cameraPitch=-30,
+            cameraTargetPosition=[0, 0, 1.0]
+        )
+        update_camera = setup_camera_controls()
+        print("Camera controls enabled: Arrow keys to rotate, +/- to zoom, WASD to pan, Q/E for up/down")
+        print("NOTE: W key is for camera movement only, wireframe toggle disabled")
     
     # Get joint information
     joint_indices = []
@@ -170,18 +219,13 @@ def setup_humanoid_for_control():
             # Reset joint state to zeros with zero velocity
             pb.resetJointState(robotId, i, 0, 0)
     
-    # Wait for visualization to initialize
-    time.sleep(1.0)
+    # Wait for visualization to initialize if GUI is enabled
+    if use_gui:
+        time.sleep(1.0)
+    
     print("Environment setup complete")
-    
-    # Small early stabilization period without control to let it settle
-    # print("Initial stabilization period...")
-    # for i in range(100):
-    #     pb.stepSimulation()
-    #     time.sleep(1/240.0)
-    
     print("Setup complete - robot ready for control")
-    return physicsClient, robotId, joint_indices, joint_names, update_camera 
+    return physicsClient, robotId, joint_indices, joint_names, update_camera
 
 def reset_humanoid(robot_id):
     """
