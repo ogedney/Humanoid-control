@@ -23,7 +23,7 @@ def main():
             robot_id=robotId,
             joint_indices=joint_indices,
             joint_names=joint_names,
-            max_force=1000,
+            max_force=100,
             # PPO specific parameters
             hidden_dim=64,        # Size of hidden layers
             learning_rate=3e-4,   # Learning rate
@@ -54,6 +54,7 @@ def main():
                     print(f"  Height: {controller.episode_height_penalty:.2f}")
                     print(f"  Energy: {controller.episode_energy_penalty:.2f}")
                     print(f"  Velocity: {controller.episode_velocity_reward:.2f}")
+                    print(f"  Orientation: {controller.episode_orientation_penalty:.2f}")
                     print("----------------------------------------")
                     
                     # If position is NaN, early stop

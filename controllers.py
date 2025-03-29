@@ -272,7 +272,7 @@ class PPONetwork(nn.Module):
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             # Initialize with larger weights to encourage more movement
-            nn.init.orthogonal_(module.weight, gain=100)
+            nn.init.orthogonal_(module.weight, gain=1000)
             nn.init.zeros_(module.bias)
     
     def forward(self, x):
@@ -336,6 +336,24 @@ class PPOController(Controller):
         
         # State and action dimensions
         self.joint_dim = len(joint_indices)
+        # Find torso link index
+        self.torso_link_index = -1 # Default to base link (-1 means use base orientation)
+        for i in range(pb.getNumJoints(self.robot_id)):
+            info = pb.getJointInfo(self.robot_id, i)
+            # Link name is at index 12
+            link_name = info[12].decode('utf-8').lower()
+            # Check if common torso/body/chest names are in the link name
+            if 'torso' in link_name or 'body' in link_name or 'chest' in link_name:
+                 # The link index is the same as the joint index for the link connected by that joint
+                 # In PyBullet, joint index `i` connects the parent link to the child link `i`
+                self.torso_link_index = i 
+                print(f"---> Identified torso/chest link: index={self.torso_link_index}, name='{info[12].decode('utf-8')}'")
+                break # Stop searching once found
+        
+        if self.torso_link_index == -1:
+             print("---> Warning: Could not find link containing 'torso', 'body' or 'chest'. Will use base orientation for angle checks.")
+
+
         self.state_dim = self.joint_dim * 2 + 7  # joint pos/vel + base pos (3) + base ori (4)
         self.action_dim = self.joint_dim
         
@@ -380,6 +398,7 @@ class PPOController(Controller):
         self.episode_height_penalty = 0
         self.episode_energy_penalty = 0
         self.episode_velocity_reward = 0
+        self.episode_orientation_penalty = 0 # Add tracker for orientation penalty
         
         # Load model if it exists and skip_load is False
         if not skip_load:
@@ -416,6 +435,55 @@ class PPOController(Controller):
         
         return state
     
+    def _get_torso_angle(self):
+        """Calculates the angle of the torso/chest relative to the world vertical axis."""
+        try:
+            if self.torso_link_index == -1: # Use base orientation if link not found
+                _, orn_quat = pb.getBasePositionAndOrientation(self.robot_id)
+            else: # Use link orientation
+                 # Fetch the state of the specific link
+                 link_state = pb.getLinkState(self.robot_id, self.torso_link_index)
+                 orn_quat = link_state[1] # World orientation quaternion of the link
+
+            # World vertical axis (positive Z)
+            world_z = np.array([0, 0, 1])
+            
+            # Get the rotation matrix from the quaternion
+            rot_matrix = np.array(pb.getMatrixFromQuaternion(orn_quat)).reshape(3, 3)
+            
+            # Extract the link's local Y-axis vector in world coordinates
+            # Assuming the link's local Y-axis points 'up' after initial rotation
+            link_up_axis_world = rot_matrix[:, 1] # Use Y-axis (second column)
+            
+            # Calculate the dot product between the link's up-axis and the world's Z-axis
+            # Normalize vectors to ensure dot product is cosine of the angle
+            # Handle potential zero vector
+            norm_link_up = np.linalg.norm(link_up_axis_world)
+            if norm_link_up < 1e-6:
+                # If link vector is zero, assume upright to avoid errors
+                return 0.0 
+                
+            link_up_axis_world_norm = link_up_axis_world / norm_link_up
+            dot_product = np.dot(link_up_axis_world_norm, world_z)
+            
+            # Clip the dot product to avoid numerical errors with arccos (should be between -1 and 1)
+            dot_product = np.clip(dot_product, -1.0, 1.0) 
+            
+            # Calculate the angle in radians using arccos
+            # This angle represents the deviation from the world vertical axis
+            angle_rad = np.arccos(dot_product)
+            
+            return angle_rad # Return angle in radians
+            
+        except Exception as e:
+            # Print specific PyBullet errors if available
+            if isinstance(e, pb.error):
+                 print(f"PyBullet Error calculating torso angle: {e}")
+            else:
+                print(f"General Error calculating torso angle: {e}")
+            # Return a neutral angle (0 = upright) in case of error
+            return 0.0 
+
     def compute_reward(self):
         """
         Compute the reward for the current state.
@@ -448,24 +516,41 @@ class PPOController(Controller):
         forward_velocity = (current_base_pos[0] - self.prev_base_pos[0]) / (1/240.0)  # velocity in m/s
         velocity_reward = 0.1 * abs(forward_velocity)  # Reward for any forward velocity
         self.episode_velocity_reward += velocity_reward
+
+        # Orientation penalty based on torso angle
+        torso_angle_rad = self._get_torso_angle()
+        # Penalize deviation from upright (0 radians). Scale penalty quadratically.
+        # Using a coefficient of -20 to make the penalty significant.
+        orientation_penalty = -5.0 * (torso_angle_rad ** 2) 
+        self.episode_orientation_penalty += orientation_penalty
         
         # Update previous position
         self.prev_base_pos = current_base_pos
         
         # Combine rewards
-        reward = forward_reward + height_penalty + energy_penalty + velocity_reward
+        reward = forward_reward + height_penalty + energy_penalty + velocity_reward + orientation_penalty
         
         return reward
     
     def has_fallen(self):
         """
-        Check if the humanoid has fallen.
+        Check if the humanoid has fallen based on torso angle or base height.
         
         Returns:
             bool: True if fallen, False otherwise
         """
+        # Check torso angle
+        torso_angle_rad = self._get_torso_angle()
+        # Fall if angle > 30 degrees (pi/6 radians) from vertical
+        fall_threshold_rad = np.pi / 6.0 
+        angle_fallen = abs(torso_angle_rad) > fall_threshold_rad
+
+        # Check base height as a fallback
         base_pos, _ = pb.getBasePositionAndOrientation(self.robot_id)
-        return base_pos[2] < 1.5  # Height threshold
+        height_fallen = base_pos[2] < 1.0 # Use a slightly lower threshold if angle is primary check
+
+        # Episode ends if either condition is met
+        return angle_fallen or height_fallen
         
     def select_action(self, state):
         """
@@ -531,6 +616,12 @@ class PPOController(Controller):
         self.episode_reward += reward
         self.episode_length += 1
         
+        # --- Debug: Print torso angle ---
+        # current_torso_angle_rad = self._get_torso_angle()
+        # current_torso_angle_deg = np.degrees(current_torso_angle_rad) # Use np.degrees for clarity
+        # print(f"Step {self.steps}: Torso Angle (Deg): {current_torso_angle_deg:.2f}")
+        # --- End Debug ---
+        
         # Check if episode is done
         done = self.has_fallen()
         
@@ -547,7 +638,9 @@ class PPOController(Controller):
         # If episode is done, reset and log
         if done:
             print(f"Episode {self.episodes} finished with reward {self.episode_reward:.2f} after {self.episode_length} steps")
-            
+            # Print reward components
+            print(f"  Reward Breakdown: Fwd={self.episode_forward_reward:.2f}, Hgt={self.episode_height_penalty:.2f}, Eng={self.episode_energy_penalty:.2f}, Vel={self.episode_velocity_reward:.2f}, Ori={self.episode_orientation_penalty:.2f}")
+
             # Save best model
             if self.episode_reward > self.best_reward:
                 self.best_reward = self.episode_reward
@@ -564,6 +657,7 @@ class PPOController(Controller):
             self.episode_height_penalty = 0
             self.episode_energy_penalty = 0
             self.episode_velocity_reward = 0
+            self.episode_orientation_penalty = 0 # Reset orientation penalty tracker
             
             # Reset humanoid position for the next episode
             reset_humanoid(self.robot_id)

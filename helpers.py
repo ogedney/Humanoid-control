@@ -167,6 +167,10 @@ def setup_humanoid_for_control(use_gui=True):
     # Load ground plane
     planeId = pb.loadURDF("plane.urdf")
     print("Loaded ground plane")
+
+    # Set friction for the ground plane
+    pb.changeDynamics(planeId, -1, lateralFriction=1.0)  # Set friction coefficient
+    print("Added friction to ground plane")
     
     # Add coordinate frame visualization only if GUI is enabled
     if use_gui:
@@ -174,7 +178,7 @@ def setup_humanoid_for_control(use_gui=True):
         print("Added coordinate frame visualization")
     
     # Load humanoid robot
-    startPos = [0, 0, 3.5]
+    startPos = [0, 0, 3.53]
     startOrientation = pb.getQuaternionFromEuler([np.pi/2, 0, 0])
     robotId = pb.loadURDF("humanoid/humanoid.urdf", startPos, startOrientation,
                          flags=pb.URDF_MAINTAIN_LINK_ORDER)
@@ -206,15 +210,15 @@ def setup_humanoid_for_control(use_gui=True):
             joint_names.append(info[1].decode('utf-8'))
             print(f"Joint {i}: {info[1].decode('utf-8')}")
             
-            # Add damping for stability
-            pb.changeDynamics(
-                robotId, 
-                i, 
-                jointDamping=5.0,
-                linearDamping=0.9,
-                angularDamping=0.9,
-                maxJointVelocity=10.0
-            )
+            # # Add damping for stability
+            # pb.changeDynamics(
+            #     robotId, 
+            #     i, 
+            #     jointDamping=5.0,
+            #     linearDamping=0.9,
+            #     angularDamping=0.9,
+            #     maxJointVelocity=10.0
+            # )
             
             # Reset joint state to zeros with zero velocity
             pb.resetJointState(robotId, i, 0, 0)
