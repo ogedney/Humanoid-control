@@ -246,24 +246,40 @@ class PDController(Controller):
 
 class PPONetwork(nn.Module):
     """
-    Neural network for PPO policy and value functions.
+    Neural network for PPO policy and value functions with separate networks.
     """
     def __init__(self, state_dim, action_dim, hidden_dim=64):
         super(PPONetwork, self).__init__()
         
-        # Shared layers
-        self.shared = nn.Sequential(
+        # Policy network (completely separate)
+        self.policy_network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
         )
         
-        # Policy head
+        # Policy output layer
         self.policy_mean = nn.Linear(hidden_dim, action_dim)
         self.policy_log_std = nn.Parameter(torch.zeros(action_dim))
         
-        # Value head
+        # Value network (completely separate)
+        self.value_network = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+        )
+        
+        # Value output layer
         self.value = nn.Linear(hidden_dim, 1)
         
         # Initialize weights
@@ -276,20 +292,20 @@ class PPONetwork(nn.Module):
             nn.init.zeros_(module.bias)
     
     def forward(self, x):
-        """Forward pass through the network."""
+        """Forward pass through the separate policy and value networks."""
         if not isinstance(x, torch.Tensor):
             x = torch.FloatTensor(x)
             
-        shared_features = self.shared(x)
-        
-        # Policy
-        action_mean = self.policy_mean(shared_features)
+        # Policy path
+        policy_features = self.policy_network(x)
+        action_mean = self.policy_mean(policy_features)
         # Initialize with larger standard deviation to encourage exploration
         action_log_std = torch.ones_like(action_mean) * 0.5
         action_std = torch.exp(action_log_std)
         
-        # Value
-        value = self.value(shared_features)
+        # Value path (completely separate)
+        value_features = self.value_network(x)
+        value = self.value(value_features)
         
         return action_mean, action_std, value
 
@@ -301,7 +317,7 @@ class PPOController(Controller):
                  hidden_dim=64, learning_rate=3e-4, batch_size=64, 
                  clip_param=0.2, gamma=0.99, lambd=0.95, 
                  value_coef=0.5, entropy_coef=0.01, max_buffer_size=4000,
-                 model_dir="ppo_models", skip_load=False):
+                 model_dir="ppo_models", skip_load=False, joint_max_forces=None):
         """
         Initialize the PPO controller.
         
@@ -309,7 +325,7 @@ class PPOController(Controller):
             robot_id: PyBullet ID of the robot
             joint_indices: List of joint indices to control
             joint_names: List of joint names corresponding to joint_indices
-            max_force: Maximum torque applied to joints
+            max_force: Maximum torque applied to joints (used if joint_max_forces is None)
             hidden_dim: Hidden dimension of the neural networks
             learning_rate: Learning rate for optimization
             batch_size: Batch size for PPO updates
@@ -321,10 +337,19 @@ class PPOController(Controller):
             max_buffer_size: Maximum size of the experience buffer
             model_dir: Directory to save models
             skip_load: If True, start with a fresh model instead of loading existing one
+            joint_max_forces: List of maximum forces for each joint. If None, max_force is used for all joints.
         """
         super().__init__(robot_id, joint_indices, joint_names)
         # Increase max force significantly for more movement
         self.max_force = max_force * 5.0
+        
+        # Initialize joint-specific max forces if provided
+        if joint_max_forces is not None:
+            if len(joint_max_forces) != len(joint_indices):
+                raise ValueError(f"Expected {len(joint_indices)} joint max forces, got {len(joint_max_forces)}")
+            self.joint_max_forces = torch.tensor(joint_max_forces).float() * 5.0  # Apply same scaling
+        else:
+            self.joint_max_forces = None
         
         # PPO parameters
         self.clip_param = clip_param
@@ -579,8 +604,15 @@ class PPOController(Controller):
         action = dist.sample()
         log_prob = dist.log_prob(action).sum()
         
-        # Clip actions to valid range with a minimum threshold
-        action_clipped = torch.clamp(action, -self.max_force, self.max_force)
+        # Clip actions to valid range with joint-specific limits if available
+        if self.joint_max_forces is not None:
+            # Use joint-specific max forces
+            joint_max_forces = self.joint_max_forces.to(self.device)
+            joint_min_forces = -joint_max_forces
+            action_clipped = torch.max(torch.min(action, joint_max_forces), joint_min_forces)
+        else:
+            # Use uniform max force for all joints
+            action_clipped = torch.clamp(action, -self.max_force, self.max_force)
         
         # Add larger random noise to encourage exploration
         action_clipped += torch.randn_like(action_clipped) * 2.0  # Increased from 0.5 to 2.0
@@ -639,7 +671,7 @@ class PPOController(Controller):
         if done:
             print(f"Episode {self.episodes} finished with reward {self.episode_reward:.2f} after {self.episode_length} steps")
             # Print reward components
-            print(f"  Reward Breakdown: Fwd={self.episode_forward_reward:.2f}, Hgt={self.episode_height_penalty:.2f}, Eng={self.episode_energy_penalty:.2f}, Vel={self.episode_velocity_reward:.2f}, Ori={self.episode_orientation_penalty:.2f}")
+            print(f"  Reward Breakdown: Fwd={self.episode_forward_reward:.2f}, Hgt={self.episode_height_penalty:.2f}, Eng={self.episode_energy_penalty:.2f}, Vel={self.episode_velocity_reward:.2f}, Ori={self.episode_orientation_penalty:.2f} \n")
 
             # Save best model
             if self.episode_reward > self.best_reward:

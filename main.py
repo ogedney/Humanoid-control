@@ -18,15 +18,25 @@ def main():
         
         # Create a PPO controller for humanoid walking
         controller_type = 'ppo'
+        
+        # Set different max forces for different joints
+        joint_max_forces = []
+        for name in joint_names:
+            if 'hip' in name.lower():
+                joint_max_forces.append(1000)  # Higher force for hip joints
+            else:
+                joint_max_forces.append(100)   # Standard force for all other joints
+        
         controller = create_controller(
             controller_type=controller_type,
             robot_id=robotId,
             joint_indices=joint_indices,
             joint_names=joint_names,
-            max_force=100,
+            max_force=100,         # Default max force (used as fallback)
+            joint_max_forces=joint_max_forces,  # Joint-specific max forces
             # PPO specific parameters
             hidden_dim=64,        # Size of hidden layers
-            learning_rate=3e-4,   # Learning rate
+            learning_rate=3e-3,   # Learning rate
             batch_size=64,        # Batch size for updates
             clip_param=0.2,       # PPO clipping parameter
             gamma=0.999,           # Discount factor
@@ -48,14 +58,14 @@ def main():
             try:
                 pos, _ = pb.getBasePositionAndOrientation(robotId)
                 if i % 1000 == 0:  # Print less frequently to reduce output
-                    print(f"Step {i}/{max_steps}: Robot at position ({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})")
-                    print(f"Episode rewards - Total: {controller.episode_reward:.2f}")
-                    print(f"  Forward: {controller.episode_forward_reward:.2f}")
-                    print(f"  Height: {controller.episode_height_penalty:.2f}")
-                    print(f"  Energy: {controller.episode_energy_penalty:.2f}")
-                    print(f"  Velocity: {controller.episode_velocity_reward:.2f}")
-                    print(f"  Orientation: {controller.episode_orientation_penalty:.2f}")
-                    print("----------------------------------------")
+                    # print(f"Step {i}/{max_steps}: Robot at position ({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})")
+                    # print(f"Episode rewards - Total: {controller.episode_reward:.2f}")
+                    # print(f"  Forward: {controller.episode_forward_reward:.2f}")
+                    # print(f"  Height: {controller.episode_height_penalty:.2f}")
+                    # print(f"  Energy: {controller.episode_energy_penalty:.2f}")
+                    # print(f"  Velocity: {controller.episode_velocity_reward:.2f}")
+                    # print(f"  Orientation: {controller.episode_orientation_penalty:.2f}")
+                    # print("----------------------------------------")
                     
                     # If position is NaN, early stop
                     if np.isnan(pos[0]) or np.isnan(pos[1]) or np.isnan(pos[2]):
