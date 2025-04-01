@@ -288,7 +288,7 @@ class PPONetwork(nn.Module):
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             # Initialize with larger weights to encourage more movement
-            nn.init.orthogonal_(module.weight, gain=1000)
+            nn.init.orthogonal_(module.weight, gain=100)
             nn.init.zeros_(module.bias)
     
     def forward(self, x):
@@ -400,7 +400,7 @@ class PPOController(Controller):
         # Training and episode tracking
         self.episodes = 0
         self.steps = 0
-        self.train_interval = 2000  # Steps between training updates
+        self.train_interval = 1000  # Steps between training updates
         self.model_dir = model_dir
         self.last_train_time = time.time()
         self.training_time = 0
@@ -598,7 +598,8 @@ class PPOController(Controller):
             action_mean, action_std, value = self.network(state)
         
         # Create normal distribution with larger standard deviation for exploration
-        dist = Normal(action_mean, action_std * 3.0)  # Increased from 2.0 to 3.0
+        exploration_scale = max(0.5, 3.0 * (1 - self.steps / 1_000_000))  # Decay from 3.0 to 0.5
+        dist = Normal(action_mean, action_std * exploration_scale)
         
         # Sample action and get log probability
         action = dist.sample()
@@ -613,9 +614,6 @@ class PPOController(Controller):
         else:
             # Use uniform max force for all joints
             action_clipped = torch.clamp(action, -self.max_force, self.max_force)
-        
-        # Add larger random noise to encourage exploration
-        action_clipped += torch.randn_like(action_clipped) * 2.0  # Increased from 0.5 to 2.0
         
         return action_clipped, log_prob, value.item()
     

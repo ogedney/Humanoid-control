@@ -35,13 +35,18 @@ def main():
             max_force=100,         # Default max force (used as fallback)
             joint_max_forces=joint_max_forces,  # Joint-specific max forces
             # PPO specific parameters
-            hidden_dim=64,        # Size of hidden layers
-            learning_rate=3e-3,   # Learning rate
-            batch_size=64,        # Batch size for updates
-            clip_param=0.2,       # PPO clipping parameter
-            gamma=0.999,           # Discount factor
-            lambd=0.99,           # GAE lambda,
-            skip_load=args.new_model  # Skip loading existing model if new_model is True
+            hidden_dim=128,        # Size of hidden layers
+            learning_rate=3e-5,    # Reduce from 3e-4 for more stable learning in complex tasks
+            batch_size=128,        # Increase from 64 for better gradient estimates
+            clip_param=0.1,        # Reduce from 0.2 for more conservative policy updates
+            gamma=0.99,            # Current value is good
+            lambd=0.95,            # Current value is good
+            skip_load=args.new_model,  # Skip loading existing model if new_model is True
+            max_buffer_size=8000,  # Increase from 4000 to retain more experiences
+            train_interval=500,    # Reduce from 1000 to train more frequently
+            num_epochs=4,         # Reduce from 10 to prevent overfitting to recent experiences
+            value_coef=0.5,        # Current value is good
+            entropy_coef=0.01      # Increase to 0.02-0.05 if actions are too conservative
         )
         
         print(f"Starting simulation with {controller_type} control...")
