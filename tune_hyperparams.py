@@ -80,7 +80,8 @@ STABILITY_WINDOW = 5  # Number of episodes to check for stability
 STABILITY_THRESHOLD = 0.1  # Maximum relative change to consider stable
 
 def run_experiment(param_name, param_value, base_dir="tune_results", 
-                   min_episodes=MIN_EPISODES, min_steps=MIN_STEPS, use_gui=False):
+                   min_episodes=MIN_EPISODES, min_steps=MIN_STEPS, use_gui=False,
+                   value_index=None, total_values=None):
     """
     Run a single hyperparameter tuning experiment with a specific parameter value.
     
@@ -105,6 +106,8 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
         min_episodes (int): Minimum number of episodes to run before checking stability
         min_steps (int): Minimum number of environment steps to run before checking stability
         use_gui (bool): Whether to enable the GUI during the simulation
+        value_index (int, optional): Index of the current value being tested
+        total_values (int, optional): Total number of values to test
         
     Returns:
         dict: Results dictionary containing:
@@ -148,7 +151,11 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     env["PPO_" + param_name.upper()] = str(param_value)
     
     # Start training process
-    print(f"Starting experiment with {param_name}={param_value}")
+    progress_info = ""
+    if value_index is not None and total_values is not None:
+        progress_info = f" ({value_index}/{total_values})"
+    
+    print(f"Starting experiment with {param_name}={param_value}{progress_info}")
     
     # Set up command with --new-model to start fresh
     cmd = ["python", "main.py", "--new-model", "--experiment-dir", experiment_dir]
@@ -157,7 +164,11 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     if not use_gui:
         cmd.append("--no-gui")
     
-    # Start the process
+    # Start the process and timer
+    start_time = time.time()
+    last_update_time = start_time
+    update_interval = 15  # Show update every 15 seconds
+    
     process = subprocess.Popen(
         cmd, 
         env=env,
@@ -179,8 +190,27 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
             line = process.stdout.readline()
             if not line and process.poll() is not None:
                 break
+            
+            # Only parse the output, don't print everything to terminal
+            
+            # Format periodic status updates
+            current_time = time.time()
+            elapsed_seconds = int(current_time - start_time)
+            if current_time - last_update_time >= update_interval or "Episode" in line and "finished with reward" in line:
+                minutes, seconds = divmod(elapsed_seconds, 60)
+                hours, minutes = divmod(minutes, 60)
                 
-            print(line, end="")  # Echo output
+                if hours > 0:
+                    time_str = f"{hours}h {minutes}m {seconds}s"
+                else:
+                    time_str = f"{minutes}m {seconds}s"
+                
+                progress_str = ""
+                if value_index is not None and total_values is not None:
+                    progress_str = f" ({value_index}/{total_values})"
+                    
+                print(f"{param_name} being tuned: testing {param_value}{progress_str}, has run for {time_str}, {episodes} episodes, {steps} steps")
+                last_update_time = current_time
             
             # Parse episode completion lines
             if "Episode" in line and "finished with reward" in line:
@@ -226,6 +256,19 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
+    
+    # Show final stats
+    elapsed_seconds = int(time.time() - start_time)
+    minutes, seconds = divmod(elapsed_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        time_str = f"{hours}h {minutes}m {seconds}s"
+    else:
+        time_str = f"{minutes}m {seconds}s"
+    
+    mean_reward = np.mean(rewards) if rewards else 0
+    print(f"Completed experiment: {param_name}={param_value}, total time: {time_str}")
+    print(f"  Episodes: {episodes}, Steps: {steps}, Mean reward: {mean_reward:.2f}")
     
     # Generate summary plot
     if rewards:
@@ -393,7 +436,9 @@ def tune_single_param(param_name, base_dir="tune_results", use_gui=False):
         print(f"Available hyperparameters: {list(HYPERPARAMS.keys())}")
         return
     
-    print(f"Tuning {param_name} with values: {HYPERPARAMS[param_name]}")
+    values = HYPERPARAMS[param_name]
+    total_values = len(values)
+    print(f"Tuning {param_name} with values: {values}")
     
     # Create result directory
     param_dir = os.path.join(base_dir, param_name)
@@ -401,8 +446,9 @@ def tune_single_param(param_name, base_dir="tune_results", use_gui=False):
     
     # Run experiments for each value
     results = []
-    for value in HYPERPARAMS[param_name]:
-        result = run_experiment(param_name, value, param_dir, use_gui=use_gui)
+    for i, value in enumerate(values):
+        result = run_experiment(param_name, value, param_dir, use_gui=use_gui, 
+                               value_index=i+1, total_values=total_values)
         results.append(result)
         
     # Analyze results
