@@ -47,4 +47,5 @@ coverage.xml
 *.pt
 *.pth
 ppo_models/
-logs/ 
+logs/
+training_log_*.txt 
