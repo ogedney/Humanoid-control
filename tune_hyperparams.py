@@ -80,7 +80,7 @@ STABILITY_WINDOW = 5  # Number of episodes to check for stability
 STABILITY_THRESHOLD = 0.1  # Maximum relative change to consider stable
 
 def run_experiment(param_name, param_value, base_dir="tune_results", 
-                   min_episodes=MIN_EPISODES, min_steps=MIN_STEPS):
+                   min_episodes=MIN_EPISODES, min_steps=MIN_STEPS, use_gui=False):
     """
     Run a single hyperparameter tuning experiment with a specific parameter value.
     
@@ -104,6 +104,7 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
         base_dir (str): Base directory to store experiment results
         min_episodes (int): Minimum number of episodes to run before checking stability
         min_steps (int): Minimum number of environment steps to run before checking stability
+        use_gui (bool): Whether to enable the GUI during the simulation
         
     Returns:
         dict: Results dictionary containing:
@@ -152,6 +153,10 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     # Set up command with --new-model to start fresh
     cmd = ["python", "main.py", "--new-model", "--experiment-dir", experiment_dir]
     
+    # Add --no-gui flag if GUI is disabled
+    if not use_gui:
+        cmd.append("--no-gui")
+    
     # Start the process
     process = subprocess.Popen(
         cmd, 
@@ -183,8 +188,8 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
                     # Extract episode number, reward, and steps
                     parts = line.split()
                     episode_num = int(parts[1])
-                    reward = float(parts[4])
-                    length = int(parts[6])
+                    reward = float(parts[5])
+                    length = int(parts[7])
                     
                     episodes = max(episodes, episode_num + 1)  # +1 because episodes are 0-indexed
                     steps += length
@@ -358,7 +363,7 @@ def analyze_results(base_dir="tune_results", param_name=None):
         for r in p_results:
             print(f"{str(r['param_value']):<10} {r['mean_reward']:<15.2f} {r['max_reward']:<15.2f} {r['episodes']:<10} {r['total_steps']:<10}")
 
-def tune_single_param(param_name, base_dir="tune_results"):
+def tune_single_param(param_name, base_dir="tune_results", use_gui=False):
     """
     Systematically tune a single hyperparameter by running experiments for all configured values.
     
@@ -374,6 +379,7 @@ def tune_single_param(param_name, base_dir="tune_results"):
     Args:
         param_name (str): Name of the hyperparameter to tune, must exist in HYPERPARAMS dict
         base_dir (str): Base directory to store all results
+        use_gui (bool): Whether to enable the GUI during the simulation
             
     Returns:
         list: List of result dictionaries from all experiments run for this parameter,
@@ -396,7 +402,7 @@ def tune_single_param(param_name, base_dir="tune_results"):
     # Run experiments for each value
     results = []
     for value in HYPERPARAMS[param_name]:
-        result = run_experiment(param_name, value, param_dir)
+        result = run_experiment(param_name, value, param_dir, use_gui=use_gui)
         results.append(result)
         
     # Analyze results
@@ -420,6 +426,7 @@ def main():
         --param (str): Parameter name to tune
         --analyze (flag): Analyze existing results without running new experiments
         --dir (str): Results directory (default: "tune_results")
+        --gui (flag): Enable GUI visualization (disabled by default for faster training)
     
     Using from Python code:
         # Tune a specific parameter
@@ -447,6 +454,7 @@ def main():
     parser.add_argument("--param", type=str, help="Parameter to tune")
     parser.add_argument("--analyze", action="store_true", help="Analyze existing results")
     parser.add_argument("--dir", type=str, default="tune_results", help="Results directory")
+    parser.add_argument("--gui", action="store_true", help="Enable GUI visualization")
     
     args = parser.parse_args()
     
@@ -458,13 +466,14 @@ def main():
         analyze_results(args.dir, args.param)
     elif args.param:
         # Tune a specific parameter
-        tune_single_param(args.param, args.dir)
+        tune_single_param(args.param, args.dir, use_gui=args.gui)
     else:
         # Show available parameters
         print("Available hyperparameters:")
         for param, values in HYPERPARAMS.items():
             print(f"  {param}: {values}")
         print("\nUse --param to specify which one to tune")
+        print("Add --gui to enable visualization (slower but helpful for debugging)")
 
 if __name__ == "__main__":
     main() 

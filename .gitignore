@@ -48,4 +48,7 @@ coverage.xml
 *.pth
 ppo_models/
 logs/
-training_log_*.txt 
+training_log_*.txt
+
+# Hyperparameter tuning results
+tune_results/ 
