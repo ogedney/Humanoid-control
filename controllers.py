@@ -400,7 +400,7 @@ class PPOController(Controller):
         # Training and episode tracking
         self.episodes = 0
         self.steps = 0
-        self.train_interval = 1000  # Steps between training updates
+        self.train_interval = 4000  # Increased from 1000 to 4000 for more diverse experience
         self.model_dir = model_dir
         self.last_train_time = time.time()
         self.training_time = 0
@@ -808,9 +808,10 @@ class PPOController(Controller):
                 
                 self.optimizer.step()
         
-        # Clear buffers after training
-        for key in self.buffers:
-            self.buffers[key].clear()
+        # Only clear buffers if they're full
+        if len(self.buffers['states']) >= self.buffers['states'].maxlen:
+            for key in self.buffers:
+                self.buffers[key].clear()
             
         # Track training time
         training_time = time.time() - start_time

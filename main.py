@@ -43,8 +43,6 @@ def main():
             lambd=0.95,            # Current value is good
             skip_load=args.new_model,  # Skip loading existing model if new_model is True
             max_buffer_size=8000,  # Increase from 4000 to retain more experiences
-            train_interval=500,    # Reduce from 1000 to train more frequently
-            num_epochs=4,         # Reduce from 10 to prevent overfitting to recent experiences
             value_coef=0.5,        # Current value is good
             entropy_coef=0.01      # Increase to 0.02-0.05 if actions are too conservative
         )
