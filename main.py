@@ -1,15 +1,27 @@
 import pybullet as pb
 import time
 import numpy as np
+import os
 from helpers import setup_humanoid_for_control
 from controllers import create_controller
 import argparse
+
+def get_env_float(name, default):
+    """Get a float value from environment variables with a default fallback."""
+    value = os.environ.get(f"PPO_{name.upper()}")
+    return float(value) if value is not None else default
+
+def get_env_int(name, default):
+    """Get an integer value from environment variables with a default fallback."""
+    value = os.environ.get(f"PPO_{name.upper()}")
+    return int(value) if value is not None else default
 
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Train a humanoid robot using PPO')
     parser.add_argument('--no-gui', action='store_true', help='Run without GUI visualization')
     parser.add_argument('--new-model', action='store_true', help='Start with a fresh model instead of loading existing one')
+    parser.add_argument('--experiment-dir', type=str, help='Directory for experiment results and models')
     args = parser.parse_args()
     
     try:
@@ -27,6 +39,36 @@ def main():
             else:
                 joint_max_forces.append(100)   # Standard force for all other joints
         
+        # Read hyperparameters from environment variables with defaults
+        hidden_dim = get_env_int("hidden_dim", 128)
+        learning_rate = get_env_float("learning_rate", 3e-5)
+        batch_size = get_env_int("batch_size", 128)
+        clip_param = get_env_float("clip_param", 0.1)
+        gamma = get_env_float("gamma", 0.99)
+        lambd = get_env_float("lambd", 0.95)
+        max_buffer_size = get_env_int("max_buffer_size", 8000)
+        value_coef = get_env_float("value_coef", 0.5)
+        entropy_coef = get_env_float("entropy_coef", 0.01)
+        train_interval = get_env_int("train_interval", 4000)
+        
+        # Use experiment directory if provided
+        model_dir = os.path.join(args.experiment_dir, "ppo_models") if args.experiment_dir else "ppo_models"
+        
+        # Log the hyperparameters being used
+        print("=== Training with hyperparameters ===")
+        print(f"hidden_dim: {hidden_dim}")
+        print(f"learning_rate: {learning_rate}")
+        print(f"batch_size: {batch_size}")
+        print(f"clip_param: {clip_param}")
+        print(f"gamma: {gamma}")
+        print(f"lambd: {lambd}")
+        print(f"max_buffer_size: {max_buffer_size}")
+        print(f"value_coef: {value_coef}")
+        print(f"entropy_coef: {entropy_coef}")
+        print(f"train_interval: {train_interval}")
+        print(f"model_dir: {model_dir}")
+        print("====================================")
+        
         controller = create_controller(
             controller_type=controller_type,
             robot_id=robotId,
@@ -35,16 +77,18 @@ def main():
             max_force=100,         # Default max force (used as fallback)
             joint_max_forces=joint_max_forces,  # Joint-specific max forces
             # PPO specific parameters
-            hidden_dim=128,        # Size of hidden layers
-            learning_rate=3e-5,    # Reduce from 3e-4 for more stable learning in complex tasks
-            batch_size=128,        # Increase from 64 for better gradient estimates
-            clip_param=0.1,        # Reduce from 0.2 for more conservative policy updates
-            gamma=0.99,            # Current value is good
-            lambd=0.95,            # Current value is good
-            skip_load=args.new_model,  # Skip loading existing model if new_model is True
-            max_buffer_size=8000,  # Increase from 4000 to retain more experiences
-            value_coef=0.5,        # Current value is good
-            entropy_coef=0.01      # Increase to 0.02-0.05 if actions are too conservative
+            hidden_dim=hidden_dim,
+            learning_rate=learning_rate,
+            batch_size=batch_size,
+            clip_param=clip_param,
+            gamma=gamma,
+            lambd=lambd,
+            skip_load=args.new_model,
+            max_buffer_size=max_buffer_size,
+            value_coef=value_coef,
+            entropy_coef=entropy_coef,
+            model_dir=model_dir,
+            train_interval=train_interval  # Pass training interval to controller
         )
         
         print(f"Starting simulation with {controller_type} control...")
@@ -61,14 +105,14 @@ def main():
             try:
                 pos, _ = pb.getBasePositionAndOrientation(robotId)
                 if i % 1000 == 0:  # Print less frequently to reduce output
-                    # print(f"Step {i}/{max_steps}: Robot at position ({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})")
-                    # print(f"Episode rewards - Total: {controller.episode_reward:.2f}")
-                    # print(f"  Forward: {controller.episode_forward_reward:.2f}")
-                    # print(f"  Height: {controller.episode_height_penalty:.2f}")
-                    # print(f"  Energy: {controller.episode_energy_penalty:.2f}")
-                    # print(f"  Velocity: {controller.episode_velocity_reward:.2f}")
-                    # print(f"  Orientation: {controller.episode_orientation_penalty:.2f}")
-                    # print("----------------------------------------")
+                    print(f"Step {i}/{max_steps}: Robot at position ({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})")
+                    print(f"Episode rewards - Total: {controller.episode_reward:.2f}")
+                    print(f"  Forward: {controller.episode_forward_reward:.2f}")
+                    print(f"  Height: {controller.episode_height_penalty:.2f}")
+                    print(f"  Energy: {controller.episode_energy_penalty:.2f}")
+                    print(f"  Velocity: {controller.episode_velocity_reward:.2f}")
+                    print(f"  Orientation: {controller.episode_orientation_penalty:.2f}")
+                    print("----------------------------------------")
                     
                     # If position is NaN, early stop
                     if np.isnan(pos[0]) or np.isnan(pos[1]) or np.isnan(pos[2]):

@@ -317,7 +317,8 @@ class PPOController(Controller):
                  hidden_dim=64, learning_rate=3e-4, batch_size=64, 
                  clip_param=0.2, gamma=0.99, lambd=0.95, 
                  value_coef=0.5, entropy_coef=0.01, max_buffer_size=4000,
-                 model_dir="ppo_models", skip_load=False, joint_max_forces=None):
+                 model_dir="ppo_models", skip_load=False, joint_max_forces=None,
+                 train_interval=4000):
         """
         Initialize the PPO controller.
         
@@ -338,6 +339,7 @@ class PPOController(Controller):
             model_dir: Directory to save models
             skip_load: If True, start with a fresh model instead of loading existing one
             joint_max_forces: List of maximum forces for each joint. If None, max_force is used for all joints.
+            train_interval: Number of steps between training updates
         """
         super().__init__(robot_id, joint_indices, joint_names)
         # Increase max force significantly for more movement
@@ -400,7 +402,7 @@ class PPOController(Controller):
         # Training and episode tracking
         self.episodes = 0
         self.steps = 0
-        self.train_interval = 4000  # Increased from 1000 to 4000 for more diverse experience
+        self.train_interval = train_interval  # Steps between training updates
         self.model_dir = model_dir
         self.last_train_time = time.time()
         self.training_time = 0
@@ -667,6 +669,13 @@ class PPOController(Controller):
         
         # If episode is done, reset and log
         if done:
+            # WARNING: DO NOT MODIFY THE FORMAT OF THE FOLLOWING PRINT STATEMENT
+            # The hyperparameter tuning script (tune_hyperparams.py) parses this specific output format 
+            # to extract episode statistics. It expects:
+            # - "Episode" keyword followed by episode number at position 1
+            # - "finished with reward" followed by the reward value at position 4
+            # - "after" followed by episode length (steps) at position 6
+            # Changing this format will break the automated hyperparameter tuning process.
             print(f"Episode {self.episodes} finished with reward {self.episode_reward:.2f} after {self.episode_length} steps")
             # Print reward components
             print(f"  Reward Breakdown: Fwd={self.episode_forward_reward:.2f}, Hgt={self.episode_height_penalty:.2f}, Eng={self.episode_energy_penalty:.2f}, Vel={self.episode_velocity_reward:.2f}, Ori={self.episode_orientation_penalty:.2f} \n")
