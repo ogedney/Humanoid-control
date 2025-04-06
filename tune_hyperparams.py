@@ -44,6 +44,32 @@ Command Line Usage Examples:
    python tune_hyperparams.py --param batch_size --dir custom_results
    ```
 
+Run-Based Organization:
+---------------------
+
+The script now organizes tuning sessions into separate runs, making it easier to compare
+results across different tuning sessions:
+
+1. Run a new tuning session for a parameter:
+   ```
+   python tune_hyperparams.py --param learning_rate
+   ```
+   This creates a new run directory with timestamp: tune_results/learning_rate/run_YYYYMMDD_HHMMSS/
+
+2. Analyze results from a specific run only:
+   ```
+   python tune_hyperparams.py --analyze --param learning_rate --run run_20250406_102045
+   ```
+
+3. Analyze all runs for a specific parameter:
+   ```
+   python tune_hyperparams.py --analyze --param learning_rate
+   ```
+
+4. Organize existing results:
+   When you run a parameter tuning for the first time after updating, any existing
+   experiment files will be automatically moved to a "run1" folder.
+
 Each experiment will:
 - Run until reaching stability criteria or minimum requirements
 - Generate plots of rewards and episode lengths
@@ -85,7 +111,7 @@ DEFAULT_SEED = 42
 
 def run_experiment(param_name, param_value, base_dir="tune_results", 
                    min_episodes=MIN_EPISODES, min_steps=MIN_STEPS, use_gui=False,
-                   value_index=None, total_values=None, seed=DEFAULT_SEED):
+                   value_index=None, total_values=None, seed=DEFAULT_SEED, run_dir=None):
     """
     Run a single hyperparameter tuning experiment with a specific parameter value.
     
@@ -113,6 +139,7 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
         value_index (int, optional): Index of the current value being tested
         total_values (int, optional): Total number of values to test
         seed (int): Random seed for reproducible experiments
+        run_dir (str, optional): Specific run directory to use within the parameter directory
         
     Returns:
         dict: Results dictionary containing:
@@ -128,7 +155,13 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     """
     # Create experiment directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    experiment_dir = os.path.join(base_dir, f"{param_name}_{param_value}_{timestamp}")
+    
+    # Use provided run_dir if specified, otherwise use timestamp directly
+    if run_dir:
+        experiment_dir = os.path.join(base_dir, f"{param_value}_{timestamp}")
+    else:
+        experiment_dir = os.path.join(base_dir, f"{param_name}_{param_value}_{timestamp}")
+    
     os.makedirs(experiment_dir, exist_ok=True)
     
     # Save configuration
@@ -413,7 +446,7 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     
     return results
 
-def analyze_results(base_dir="tune_results", param_name=None):
+def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
     """
     Analyze and compare results across multiple completed experiments.
     
@@ -431,6 +464,7 @@ def analyze_results(base_dir="tune_results", param_name=None):
         base_dir (str): Base directory containing experiment result folders
         param_name (str, optional): If provided, only analyze experiments for this specific parameter.
             If None, analyze all experiments found in the directory.
+        run_dir (str, optional): If provided, only analyze experiments within this run directory.
             
     Returns:
         None, but produces:
@@ -439,27 +473,44 @@ def analyze_results(base_dir="tune_results", param_name=None):
     """
     results = []
     
-    # Iterate through experiment directories
-    for exp_dir in os.listdir(base_dir):
-        exp_path = os.path.join(base_dir, exp_dir)
-        if not os.path.isdir(exp_path):
-            continue
+    # If we're analyzing a specific parameter with a run directory
+    if param_name and run_dir:
+        search_path = os.path.join(base_dir, param_name, run_dir)
+    # If we're analyzing just a specific parameter
+    elif param_name:
+        search_path = os.path.join(base_dir, param_name)
+    # If we're analyzing everything
+    else:
+        search_path = base_dir
+    
+    # Function to recursively search for result files
+    def find_result_files(directory):
+        found_results = []
+        
+        for item in os.listdir(directory):
+            item_path = os.path.join(directory, item)
             
-        # Check if results file exists
-        results_file = os.path.join(exp_path, "results.json")
-        if not os.path.exists(results_file):
-            continue
-            
-        # Load results
-        with open(results_file, "r") as f:
-            result = json.load(f)
-            
-        # Filter by param_name if specified
-        if param_name is None or result.get("param_name") == param_name:
-            results.append(result)
+            if os.path.isdir(item_path):
+                # Check if this directory contains a results.json file
+                results_file = os.path.join(item_path, "results.json")
+                if os.path.exists(results_file):
+                    # If it does, load the results
+                    with open(results_file, "r") as f:
+                        result = json.load(f)
+                    # Filter by param_name if specified
+                    if param_name is None or result.get("param_name") == param_name:
+                        found_results.append(result)
+                else:
+                    # If not, search its subdirectories
+                    found_results.extend(find_result_files(item_path))
+        
+        return found_results
+    
+    if os.path.exists(search_path):
+        results = find_result_files(search_path)
     
     if not results:
-        print("No results found to analyze")
+        print(f"No results found to analyze in {search_path}")
         return
     
     # Group results by parameter name
@@ -472,6 +523,12 @@ def analyze_results(base_dir="tune_results", param_name=None):
     
     # Generate comparative plots for each parameter
     for p_name, p_results in param_results.items():
+        # Determine the output directory for plots
+        if run_dir:
+            output_dir = os.path.join(base_dir, p_name, run_dir)
+        else:
+            output_dir = os.path.join(base_dir, p_name)
+        
         # Sort by parameter value for plotting
         p_results.sort(key=lambda x: x["param_value"])
         
@@ -496,7 +553,7 @@ def analyze_results(base_dir="tune_results", param_name=None):
         plt.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(base_dir, f"{p_name}_reward_comparison.png"))
+        plt.savefig(os.path.join(output_dir, f"{p_name}_reward_comparison.png"))
         plt.close()
         
         # Loss metrics plots if available
@@ -519,7 +576,7 @@ def analyze_results(base_dir="tune_results", param_name=None):
             plt.legend()
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
-            plt.savefig(os.path.join(base_dir, f"{p_name}_loss_comparison.png"))
+            plt.savefig(os.path.join(output_dir, f"{p_name}_loss_comparison.png"))
             plt.close()
             
             # Entropy comparison plot
@@ -532,7 +589,7 @@ def analyze_results(base_dir="tune_results", param_name=None):
             plt.legend()
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
-            plt.savefig(os.path.join(base_dir, f"{p_name}_entropy_comparison.png"))
+            plt.savefig(os.path.join(output_dir, f"{p_name}_entropy_comparison.png"))
             plt.close()
             
             # KL divergence comparison plot
@@ -545,7 +602,7 @@ def analyze_results(base_dir="tune_results", param_name=None):
             plt.legend()
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
-            plt.savefig(os.path.join(base_dir, f"{p_name}_kl_divergence_comparison.png"))
+            plt.savefig(os.path.join(output_dir, f"{p_name}_kl_divergence_comparison.png"))
             plt.close()
         
     # Print summary table
@@ -578,6 +635,46 @@ def analyze_results(base_dir="tune_results", param_name=None):
                 
                 print(f"{str(r['param_value']):<10} {policy_loss:<15.6f} {value_loss:<15.6f} {total_loss:<15.6f} {entropy:<10.6f} {kl_divergence:<10.6f}")
 
+def move_existing_files(param_dir):
+    """
+    Move existing experiment files in a parameter directory to a subfolder.
+    
+    This function:
+    1. Creates a 'run1' subfolder if it doesn't exist
+    2. Moves all experiment files and folders to this subfolder
+    3. Preserves any analysis files at the parameter directory level
+    
+    Args:
+        param_dir (str): Path to the parameter directory
+    """
+    if not os.path.exists(param_dir):
+        return
+        
+    # Create run1 directory if it doesn't exist
+    run1_dir = os.path.join(param_dir, "run1")
+    os.makedirs(run1_dir, exist_ok=True)
+    
+    # Get list of items to move (all folders named like param_value_timestamp)
+    items_to_move = []
+    for item in os.listdir(param_dir):
+        item_path = os.path.join(param_dir, item)
+        # Only move directories that match the experiment naming pattern 
+        # and comparison PNG files
+        if (os.path.isdir(item_path) and not item.startswith("run")) or \
+           (item.endswith(".png") and "comparison" in item):
+            items_to_move.append(item)
+    
+    # Move items to run1 directory
+    for item in items_to_move:
+        src_path = os.path.join(param_dir, item)
+        dst_path = os.path.join(run1_dir, item)
+        
+        try:
+            os.rename(src_path, dst_path)
+            print(f"Moved {item} to {run1_dir}")
+        except Exception as e:
+            print(f"Error moving {item}: {e}")
+
 def tune_single_param(param_name, base_dir="tune_results", use_gui=False, seed=DEFAULT_SEED):
     """
     Systematically tune a single hyperparameter by running experiments for all configured values.
@@ -585,8 +682,9 @@ def tune_single_param(param_name, base_dir="tune_results", use_gui=False, seed=D
     This function:
     1. Validates that the requested parameter exists in the HYPERPARAMS dictionary
     2. Creates a dedicated directory for this parameter's experiments
-    3. Sequentially runs experiments for each value defined in HYPERPARAMS
-    4. After all values are tested, analyzes the results to identify the best value
+    3. Creates a new run directory for this series of experiments
+    4. Sequentially runs experiments for each value defined in HYPERPARAMS
+    5. After all values are tested, analyzes the results to identify the best value
     
     The function automates the entire process of testing multiple values of a single
     hyperparameter while keeping all other parameters at their default values.
@@ -613,19 +711,30 @@ def tune_single_param(param_name, base_dir="tune_results", use_gui=False, seed=D
     total_values = len(values)
     print(f"Tuning {param_name} with values: {values}")
     
-    # Create result directory
+    # Create parameter directory
     param_dir = os.path.join(base_dir, param_name)
     os.makedirs(param_dir, exist_ok=True)
+    
+    # Check if there are existing experiment files and move them to run1 if needed
+    move_existing_files(param_dir)
+    
+    # Create a new run directory with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = f"run_{timestamp}"
+    run_path = os.path.join(param_dir, run_dir)
+    os.makedirs(run_path, exist_ok=True)
+    
+    print(f"Created new run directory: {run_path}")
     
     # Run experiments for each value
     results = []
     for i, value in enumerate(values):
-        result = run_experiment(param_name, value, param_dir, use_gui=use_gui, 
+        result = run_experiment(param_name, value, run_path, use_gui=use_gui, 
                                value_index=i+1, total_values=total_values, seed=seed)
         results.append(result)
         
-    # Analyze results
-    analyze_results(param_dir, param_name)
+    # Analyze results just for this run
+    analyze_results(base_dir, param_name, run_dir)
     
     return results
 
@@ -647,6 +756,7 @@ def main():
         --dir (str): Results directory (default: "tune_results")
         --gui (flag): Enable GUI visualization (disabled by default for faster training)
         --seed (int): Random seed for reproducible experiments (default: 42)
+        --run (str): Specific run directory to analyze (for --analyze)
     
     Using from Python code:
         # Tune a specific parameter
@@ -659,6 +769,26 @@ def main():
         # Run an individual experiment with custom stability settings
         result = tune_hyperparams.run_experiment("entropy_coef", 0.03, 
                                                min_episodes=30, min_steps=150000)
+        
+        # Analyze results from a specific run
+        tune_hyperparams.analyze_results(
+            base_dir="tune_results", 
+            param_name="learning_rate", 
+            run_dir="run_20250406_102045"
+        )
+    
+    Examples:
+        # Tune learning rate (creates a new run directory)
+        python tune_hyperparams.py --param learning_rate
+        
+        # Analyze all learning rate experiments across all runs
+        python tune_hyperparams.py --analyze --param learning_rate
+        
+        # Analyze only the experiments from a specific run
+        python tune_hyperparams.py --analyze --param learning_rate --run run_20250406_102045
+        
+        # Run with visualization enabled (useful for debugging)
+        python tune_hyperparams.py --param hidden_dim --gui
     
     Notes:
         Parameters are tuned sequentially, not in parallel. Each value of a parameter
@@ -676,6 +806,7 @@ def main():
     parser.add_argument("--dir", type=str, default="tune_results", help="Results directory")
     parser.add_argument("--gui", action="store_true", help="Enable GUI visualization")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed for reproducible experiments")
+    parser.add_argument("--run", type=str, help="Specific run directory to analyze (for --analyze)")
     
     args = parser.parse_args()
     
@@ -684,7 +815,7 @@ def main():
     
     if args.analyze:
         # Just analyze existing results
-        analyze_results(args.dir, args.param)
+        analyze_results(args.dir, args.param, args.run)
     elif args.param:
         # Tune a specific parameter
         tune_single_param(args.param, args.dir, use_gui=args.gui, seed=args.seed)
@@ -696,6 +827,7 @@ def main():
         print("\nUse --param to specify which one to tune")
         print("Add --gui to enable visualization (slower but helpful for debugging)")
         print(f"Default seed value: {DEFAULT_SEED} (use --seed to change)")
+        print("Use --run to specify a specific run directory when analyzing results")
 
 if __name__ == "__main__":
     main() 
