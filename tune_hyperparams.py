@@ -79,9 +79,13 @@ MIN_STEPS = 100000
 STABILITY_WINDOW = 5  # Number of episodes to check for stability
 STABILITY_THRESHOLD = 0.1  # Maximum relative change to consider stable
 
+# Fixed seed for reproducibility across runs
+# Using a large prime number for good randomness initialization
+DEFAULT_SEED = 42
+
 def run_experiment(param_name, param_value, base_dir="tune_results", 
                    min_episodes=MIN_EPISODES, min_steps=MIN_STEPS, use_gui=False,
-                   value_index=None, total_values=None):
+                   value_index=None, total_values=None, seed=DEFAULT_SEED):
     """
     Run a single hyperparameter tuning experiment with a specific parameter value.
     
@@ -108,6 +112,7 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
         use_gui (bool): Whether to enable the GUI during the simulation
         value_index (int, optional): Index of the current value being tested
         total_values (int, optional): Total number of values to test
+        seed (int): Random seed for reproducible experiments
         
     Returns:
         dict: Results dictionary containing:
@@ -131,7 +136,8 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
         "param_value": param_value,
         "timestamp": timestamp,
         "min_episodes": min_episodes,
-        "min_steps": min_steps
+        "min_steps": min_steps,
+        "seed": seed
     }
     
     with open(os.path.join(experiment_dir, "config.json"), "w") as f:
@@ -157,8 +163,8 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     
     print(f"Starting experiment with {param_name}={param_value}{progress_info}")
     
-    # Set up command with --new-model to start fresh
-    cmd = ["python", "main.py", "--new-model", "--experiment-dir", experiment_dir]
+    # Set up command with --new-model to start fresh and include seed
+    cmd = ["python", "main.py", "--new-model", "--experiment-dir", experiment_dir, "--seed", str(seed)]
     
     # Add --no-gui flag if GUI is disabled
     if not use_gui:
@@ -406,7 +412,7 @@ def analyze_results(base_dir="tune_results", param_name=None):
         for r in p_results:
             print(f"{str(r['param_value']):<10} {r['mean_reward']:<15.2f} {r['max_reward']:<15.2f} {r['episodes']:<10} {r['total_steps']:<10}")
 
-def tune_single_param(param_name, base_dir="tune_results", use_gui=False):
+def tune_single_param(param_name, base_dir="tune_results", use_gui=False, seed=DEFAULT_SEED):
     """
     Systematically tune a single hyperparameter by running experiments for all configured values.
     
@@ -423,6 +429,7 @@ def tune_single_param(param_name, base_dir="tune_results", use_gui=False):
         param_name (str): Name of the hyperparameter to tune, must exist in HYPERPARAMS dict
         base_dir (str): Base directory to store all results
         use_gui (bool): Whether to enable the GUI during the simulation
+        seed (int): Random seed for reproducible experiments
             
     Returns:
         list: List of result dictionaries from all experiments run for this parameter,
@@ -448,7 +455,7 @@ def tune_single_param(param_name, base_dir="tune_results", use_gui=False):
     results = []
     for i, value in enumerate(values):
         result = run_experiment(param_name, value, param_dir, use_gui=use_gui, 
-                               value_index=i+1, total_values=total_values)
+                               value_index=i+1, total_values=total_values, seed=seed)
         results.append(result)
         
     # Analyze results
@@ -473,6 +480,7 @@ def main():
         --analyze (flag): Analyze existing results without running new experiments
         --dir (str): Results directory (default: "tune_results")
         --gui (flag): Enable GUI visualization (disabled by default for faster training)
+        --seed (int): Random seed for reproducible experiments (default: 42)
     
     Using from Python code:
         # Tune a specific parameter
@@ -501,6 +509,7 @@ def main():
     parser.add_argument("--analyze", action="store_true", help="Analyze existing results")
     parser.add_argument("--dir", type=str, default="tune_results", help="Results directory")
     parser.add_argument("--gui", action="store_true", help="Enable GUI visualization")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed for reproducible experiments")
     
     args = parser.parse_args()
     
@@ -512,7 +521,7 @@ def main():
         analyze_results(args.dir, args.param)
     elif args.param:
         # Tune a specific parameter
-        tune_single_param(args.param, args.dir, use_gui=args.gui)
+        tune_single_param(args.param, args.dir, use_gui=args.gui, seed=args.seed)
     else:
         # Show available parameters
         print("Available hyperparameters:")
@@ -520,6 +529,7 @@ def main():
             print(f"  {param}: {values}")
         print("\nUse --param to specify which one to tune")
         print("Add --gui to enable visualization (slower but helpful for debugging)")
+        print(f"Default seed value: {DEFAULT_SEED} (use --seed to change)")
 
 if __name__ == "__main__":
     main() 

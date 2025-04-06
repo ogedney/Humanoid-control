@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--no-gui', action='store_true', help='Run without GUI visualization')
     parser.add_argument('--new-model', action='store_true', help='Start with a fresh model instead of loading existing one')
     parser.add_argument('--experiment-dir', type=str, help='Directory for experiment results and models')
+    parser.add_argument('--seed', type=int, help='Random seed for reproducible training')
     args = parser.parse_args()
     
     try:
@@ -40,7 +41,7 @@ def main():
                 joint_max_forces.append(100)   # Standard force for all other joints
         
         # Read hyperparameters from environment variables with defaults
-        hidden_dim = get_env_int("hidden_dim", 128)
+        hidden_dim = get_env_int("hidden_dim", 256)
         learning_rate = get_env_float("learning_rate", 3e-5)
         batch_size = get_env_int("batch_size", 128)
         clip_param = get_env_float("clip_param", 0.1)
@@ -50,6 +51,13 @@ def main():
         value_coef = get_env_float("value_coef", 0.5)
         entropy_coef = get_env_float("entropy_coef", 0.01)
         train_interval = get_env_int("train_interval", 4000)
+        
+        # Get seed from environment variable if not provided via command line
+        seed = args.seed
+        if seed is None:
+            seed_env = os.environ.get("PPO_SEED")
+            if seed_env is not None:
+                seed = int(seed_env)
         
         # Use experiment directory if provided
         model_dir = os.path.join(args.experiment_dir, "ppo_models") if args.experiment_dir else "ppo_models"
@@ -67,6 +75,7 @@ def main():
         print(f"entropy_coef: {entropy_coef}")
         print(f"train_interval: {train_interval}")
         print(f"model_dir: {model_dir}")
+        print(f"seed: {seed}")
         print("====================================")
         
         controller = create_controller(
@@ -88,7 +97,8 @@ def main():
             value_coef=value_coef,
             entropy_coef=entropy_coef,
             model_dir=model_dir,
-            train_interval=train_interval  # Pass training interval to controller
+            train_interval=train_interval,  # Pass training interval to controller
+            seed=seed  # Pass the seed to the controller
         )
         
         print(f"Starting simulation with {controller_type} control...")

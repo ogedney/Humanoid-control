@@ -248,16 +248,12 @@ class PPONetwork(nn.Module):
     """
     Neural network for PPO policy and value functions with separate networks.
     """
-    def __init__(self, state_dim, action_dim, hidden_dim=64):
+    def __init__(self, state_dim, action_dim, hidden_dim=256):
         super(PPONetwork, self).__init__()
         
-        # Policy network (completely separate)
+        # Policy network (completely separate) - reduced to 2 hidden layers
         self.policy_network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
@@ -270,10 +266,6 @@ class PPONetwork(nn.Module):
         # Value network (completely separate)
         self.value_network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
@@ -314,11 +306,11 @@ class PPOController(Controller):
     PPO-based controller for humanoid walking using torque control.
     """
     def __init__(self, robot_id, joint_indices, joint_names, max_force=20.0, 
-                 hidden_dim=64, learning_rate=3e-4, batch_size=64, 
+                 hidden_dim=256, learning_rate=3e-4, batch_size=64, 
                  clip_param=0.2, gamma=0.99, lambd=0.95, 
                  value_coef=0.5, entropy_coef=0.01, max_buffer_size=4000,
                  model_dir="ppo_models", skip_load=False, joint_max_forces=None,
-                 train_interval=4000):
+                 train_interval=4000, seed=None):
         """
         Initialize the PPO controller.
         
@@ -340,10 +332,23 @@ class PPOController(Controller):
             skip_load: If True, start with a fresh model instead of loading existing one
             joint_max_forces: List of maximum forces for each joint. If None, max_force is used for all joints.
             train_interval: Number of steps between training updates
+            seed: Random seed for reproducible network initialization (None for random)
         """
         super().__init__(robot_id, joint_indices, joint_names)
         # Increase max force significantly for more movement
         self.max_force = max_force * 5.0
+        
+        # Set random seed if provided for reproducibility
+        self.seed = seed
+        if seed is not None:
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(seed)
+                torch.cuda.manual_seed_all(seed)  # For multi-GPU setups
+            # Extra determinism
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
         
         # Initialize joint-specific max forces if provided
         if joint_max_forces is not None:
