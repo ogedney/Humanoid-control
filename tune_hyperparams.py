@@ -124,6 +124,7 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
             - std_reward: Standard deviation of episode rewards
             - max_reward: Maximum episode reward achieved
             - mean_episode_length: Average episode length in steps
+            - loss_data: Dictionary containing neural network loss curves
     """
     # Create experiment directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -151,6 +152,11 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     stats_file = os.path.join(experiment_dir, "training_stats.txt")
     with open(stats_file, "w") as f:
         f.write("episode,reward,length,steps\n")
+    
+    # Set up loss tracking file
+    loss_file = os.path.join(experiment_dir, "loss_stats.txt")
+    with open(loss_file, "w") as f:
+        f.write("training_iter,total_steps,policy_loss,value_loss,entropy,total_loss,kl_divergence\n")
     
     # Set up environment variables for hyperparameter
     env = os.environ.copy()
@@ -189,6 +195,18 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     steps = 0
     rewards = []
     episode_lengths = []
+    
+    # Track loss data
+    loss_data = {
+        'training_iter': [],
+        'total_steps': [],
+        'policy_loss': [],
+        'value_loss': [],
+        'entropy': [],
+        'total_loss': [],
+        'kl_divergence': []  # Track KL divergence between old and new policies
+    }
+    training_iter = 0
     
     # Monitor the process output
     try:
@@ -251,6 +269,35 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
                                     break
                 except Exception as e:
                     print(f"Error parsing output: {e}")
+            
+            # Parse loss data lines
+            if "LOSS_DATA:" in line:
+                try:
+                    # Extract loss values using regex
+                    import re
+                    policy_loss = float(re.search(r'policy_loss=(\d+\.\d+)', line).group(1))
+                    value_loss = float(re.search(r'value_loss=(\d+\.\d+)', line).group(1))
+                    entropy = float(re.search(r'entropy=(\d+\.\d+)', line).group(1))
+                    total_loss = float(re.search(r'total_loss=(\d+\.\d+)', line).group(1))
+                    kl_divergence = float(re.search(r'kl_divergence=(\d+\.\d+)', line).group(1))
+                    
+                    training_iter += 1
+                    
+                    # Store loss data
+                    loss_data['training_iter'].append(training_iter)
+                    loss_data['total_steps'].append(steps)
+                    loss_data['policy_loss'].append(policy_loss)
+                    loss_data['value_loss'].append(value_loss)
+                    loss_data['entropy'].append(entropy)
+                    loss_data['total_loss'].append(total_loss)
+                    loss_data['kl_divergence'].append(kl_divergence)
+                    
+                    # Log to loss file
+                    with open(loss_file, "a") as f:
+                        f.write(f"{training_iter},{steps},{policy_loss},{value_loss},{entropy},{total_loss},{kl_divergence}\n")
+                    
+                except Exception as e:
+                    print(f"Error parsing loss data: {e}")
                     
     except KeyboardInterrupt:
         print("Interrupted by user")
@@ -276,26 +323,71 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     print(f"Completed experiment: {param_name}={param_value}, total time: {time_str}")
     print(f"  Episodes: {episodes}, Steps: {steps}, Mean reward: {mean_reward:.2f}")
     
-    # Generate summary plot
+    # Generate summary plots
     if rewards:
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(12, 16))
         
-        plt.subplot(2, 1, 1)
+        # Plot rewards
+        plt.subplot(3, 1, 1)
         plt.plot(rewards)
         plt.title(f"Rewards for {param_name}={param_value}")
         plt.xlabel("Episode")
         plt.ylabel("Total Reward")
         plt.grid(True)
         
-        plt.subplot(2, 1, 2)
+        # Plot episode lengths
+        plt.subplot(3, 1, 2)
         plt.plot(episode_lengths)
         plt.title("Episode Lengths")
         plt.xlabel("Episode")
         plt.ylabel("Steps")
         plt.grid(True)
         
+        # Plot loss curves if available
+        if loss_data['training_iter']:
+            plt.subplot(3, 1, 3)
+            plt.plot(loss_data['training_iter'], loss_data['policy_loss'], label='Policy Loss')
+            plt.plot(loss_data['training_iter'], loss_data['value_loss'], label='Value Loss')
+            plt.plot(loss_data['training_iter'], loss_data['total_loss'], label='Total Loss')
+            plt.title("Training Losses")
+            plt.xlabel("Training Iteration")
+            plt.ylabel("Loss")
+            plt.legend()
+            plt.grid(True)
+        
         plt.tight_layout()
         plt.savefig(os.path.join(experiment_dir, "training_curve.png"))
+        
+        # Generate additional plots for entropy and KL divergence
+        if loss_data['training_iter']:
+            plt.figure(figsize=(12, 10))
+            
+            # Entropy plot
+            plt.subplot(2, 1, 1)
+            plt.plot(loss_data['training_iter'], loss_data['entropy'])
+            plt.title("Entropy")
+            plt.xlabel("Training Iteration")
+            plt.ylabel("Entropy")
+            plt.grid(True)
+            
+            # KL divergence plot
+            plt.subplot(2, 1, 2)
+            plt.plot(loss_data['training_iter'], loss_data['kl_divergence'])
+            plt.title("KL Divergence (Policy Update Magnitude)")
+            plt.xlabel("Training Iteration")
+            plt.ylabel("KL Divergence")
+            plt.grid(True)
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(experiment_dir, "policy_metrics.png"))
+            plt.close()
+    
+    # Calculate average loss values
+    avg_policy_loss = np.mean(loss_data['policy_loss']) if loss_data['policy_loss'] else 0
+    avg_value_loss = np.mean(loss_data['value_loss']) if loss_data['value_loss'] else 0
+    avg_entropy = np.mean(loss_data['entropy']) if loss_data['entropy'] else 0
+    avg_total_loss = np.mean(loss_data['total_loss']) if loss_data['total_loss'] else 0
+    avg_kl_divergence = np.mean(loss_data['kl_divergence']) if loss_data['kl_divergence'] else 0
     
     # Save final results summary
     results = {
@@ -306,7 +398,14 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
         "mean_reward": np.mean(rewards) if rewards else 0,
         "std_reward": np.std(rewards) if rewards else 0,
         "max_reward": np.max(rewards) if rewards else 0,
-        "mean_episode_length": np.mean(episode_lengths) if episode_lengths else 0
+        "mean_episode_length": np.mean(episode_lengths) if episode_lengths else 0,
+        "loss_metrics": {
+            "avg_policy_loss": avg_policy_loss,
+            "avg_value_loss": avg_value_loss,
+            "avg_entropy": avg_entropy,
+            "avg_total_loss": avg_total_loss,
+            "avg_kl_divergence": avg_kl_divergence
+        }
     }
     
     with open(os.path.join(experiment_dir, "results.json"), "w") as f:
@@ -380,6 +479,7 @@ def analyze_results(base_dir="tune_results", param_name=None):
         mean_rewards = [r["mean_reward"] for r in p_results]
         max_rewards = [r["max_reward"] for r in p_results]
         
+        # Reward plot
         plt.figure(figsize=(10, 6))
         
         x = np.arange(len(values))
@@ -396,8 +496,57 @@ def analyze_results(base_dir="tune_results", param_name=None):
         plt.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(base_dir, f"{p_name}_comparison.png"))
+        plt.savefig(os.path.join(base_dir, f"{p_name}_reward_comparison.png"))
         plt.close()
+        
+        # Loss metrics plots if available
+        if all('loss_metrics' in r for r in p_results):
+            # Policy loss
+            policy_losses = [r.get('loss_metrics', {}).get('avg_policy_loss', 0) for r in p_results]
+            value_losses = [r.get('loss_metrics', {}).get('avg_value_loss', 0) for r in p_results]
+            total_losses = [r.get('loss_metrics', {}).get('avg_total_loss', 0) for r in p_results]
+            entropy_values = [r.get('loss_metrics', {}).get('avg_entropy', 0) for r in p_results]
+            kl_divergences = [r.get('loss_metrics', {}).get('avg_kl_divergence', 0) for r in p_results]
+            
+            # Loss comparison plot
+            plt.figure(figsize=(10, 6))
+            plt.bar(x - width/2, policy_losses, width, label='Policy Loss')
+            plt.bar(x + width/2, value_losses, width, label='Value Loss')
+            plt.xlabel(f'{p_name} Value')
+            plt.ylabel('Average Loss')
+            plt.title(f'Loss Metrics by {p_name}')
+            plt.xticks(x, values)
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(base_dir, f"{p_name}_loss_comparison.png"))
+            plt.close()
+            
+            # Entropy comparison plot
+            plt.figure(figsize=(10, 6))
+            plt.bar(x, entropy_values, width, label='Entropy')
+            plt.xlabel(f'{p_name} Value')
+            plt.ylabel('Average Entropy')
+            plt.title(f'Entropy by {p_name}')
+            plt.xticks(x, values)
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(base_dir, f"{p_name}_entropy_comparison.png"))
+            plt.close()
+            
+            # KL divergence comparison plot
+            plt.figure(figsize=(10, 6))
+            plt.bar(x, kl_divergences, width, label='KL Divergence')
+            plt.xlabel(f'{p_name} Value')
+            plt.ylabel('Average KL Divergence')
+            plt.title(f'Policy Update Magnitude by {p_name}')
+            plt.xticks(x, values)
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(base_dir, f"{p_name}_kl_divergence_comparison.png"))
+            plt.close()
         
     # Print summary table
     print("\nPerformance Summary:")
@@ -411,6 +560,23 @@ def analyze_results(base_dir="tune_results", param_name=None):
         
         for r in p_results:
             print(f"{str(r['param_value']):<10} {r['mean_reward']:<15.2f} {r['max_reward']:<15.2f} {r['episodes']:<10} {r['total_steps']:<10}")
+        
+        # Print loss metrics if available
+        if all('loss_metrics' in r for r in p_results):
+            print("\nLoss Metrics:")
+            print(f"{'Value':<10} {'Policy Loss':<15} {'Value Loss':<15} {'Total Loss':<15} {'Entropy':<10} {'KL Div':<10}")
+            print("-" * 75)
+            
+            # Same order as reward table (already sorted)
+            for r in p_results:
+                metrics = r.get('loss_metrics', {})
+                policy_loss = metrics.get('avg_policy_loss', 0)
+                value_loss = metrics.get('avg_value_loss', 0)
+                total_loss = metrics.get('avg_total_loss', 0)
+                entropy = metrics.get('avg_entropy', 0)
+                kl_divergence = metrics.get('avg_kl_divergence', 0)
+                
+                print(f"{str(r['param_value']):<10} {policy_loss:<15.6f} {value_loss:<15.6f} {total_loss:<15.6f} {entropy:<10.6f} {kl_divergence:<10.6f}")
 
 def tune_single_param(param_name, base_dir="tune_results", use_gui=False, seed=DEFAULT_SEED):
     """

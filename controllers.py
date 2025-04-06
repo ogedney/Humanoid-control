@@ -783,6 +783,19 @@ class PPOController(Controller):
         # Normalize advantages
         advantages_tensor = (advantages_tensor - advantages_tensor.mean()) / (advantages_tensor.std() + 1e-8)
         
+        # Get old policy distribution parameters for all states (for KL calculation)
+        with torch.no_grad():
+            old_action_mean, old_action_std, _ = self.network(states_tensor)
+            old_policy = Normal(old_action_mean, old_action_std)
+        
+        # Track losses for logging
+        avg_policy_loss = 0
+        avg_value_loss = 0
+        avg_entropy = 0
+        avg_total_loss = 0
+        avg_kl_divergence = 0  # Track KL divergence between old and new policies
+        update_count = 0
+        
         # Mini-batch training
         for _ in range(num_epochs):
             # Generate random indices
@@ -836,6 +849,41 @@ class PPOController(Controller):
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), 0.5)
                 
                 self.optimizer.step()
+                
+                # Accumulate losses for logging
+                avg_policy_loss += policy_loss.item()
+                avg_value_loss += value_loss.item()
+                avg_entropy += entropy.item()
+                avg_total_loss += loss.item()
+                
+                # Calculate KL divergence between old and new policy for this batch
+                with torch.no_grad():
+                    old_mb_mean = old_action_mean[idx]
+                    old_mb_std = old_action_std[idx]
+                    old_mb_policy = Normal(old_mb_mean, old_mb_std)
+                    new_mb_policy = Normal(action_mean, action_std)
+                    
+                    # KL divergence for multivariate Gaussian (analytically calculated)
+                    # KL(p||q) = 0.5 * (log(det(Σq)/det(Σp)) - d + tr(Σq^-1 Σp) + (μq-μp)^T Σq^-1 (μq-μp))
+                    # For diagonal covariance matrices, this simplifies to:
+                    kl_per_dim = 0.5 * (
+                        2 * torch.log(action_std) - 2 * torch.log(old_mb_std) 
+                        + (old_mb_std.pow(2) + (old_mb_mean - action_mean).pow(2)) / action_std.pow(2) 
+                        - 1
+                    )
+                    # Sum across action dimensions, then average across batch
+                    kl_divergence = kl_per_dim.sum(dim=1).mean().item()
+                    avg_kl_divergence += kl_divergence
+                
+                update_count += 1
+        
+        # Calculate average losses
+        if update_count > 0:
+            avg_policy_loss /= update_count
+            avg_value_loss /= update_count
+            avg_entropy /= update_count
+            avg_total_loss /= update_count
+            avg_kl_divergence /= update_count
         
         # Only clear buffers if they're full
         if len(self.buffers['states']) >= self.buffers['states'].maxlen:
@@ -846,6 +894,9 @@ class PPOController(Controller):
         training_time = time.time() - start_time
         self.training_time += training_time
         self.training_iterations += 1
+        
+        # Log losses to be captured by hyperparameter tuning script
+        print(f"LOSS_DATA: policy_loss={avg_policy_loss:.6f}, value_loss={avg_value_loss:.6f}, entropy={avg_entropy:.6f}, total_loss={avg_total_loss:.6f}, kl_divergence={avg_kl_divergence:.6f}")
     
     def save_model(self, tag="checkpoint"):
         """
