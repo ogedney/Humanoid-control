@@ -72,7 +72,7 @@ HYPERPARAMS = {
 MIN_EPISODES = 20
 
 # Minimum number of steps to run for each configuration
-MIN_STEPS = 100000
+MIN_STEPS = 1000000
 
 # Set up reward stability check - we consider training "long enough" when
 # the average reward over the last N episodes has stabilized
