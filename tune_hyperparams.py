@@ -504,13 +504,14 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
     
     This function:
     1. Recursively searches the results directory for experiment results
-    2. Loads and processes all results.json files found
+    2. Loads and processes all results.json and loss_stats.txt files found
     3. Groups results by parameter name
     4. Generates comparative bar charts showing mean and max rewards for each parameter value
-    5. Prints performance summary tables sorted by mean reward (best first)
+    5. Generates line plots comparing policy and value loss curves against total steps
+    6. Prints performance summary tables sorted by mean reward (best first)
     
     The analysis focuses on comparing different values of the same hyperparameter
-    to identify which values led to the best performance.
+    to identify which values led to the best performance and training dynamics.
     
     Args:
         base_dir (str): Base directory containing experiment result folders
@@ -521,6 +522,7 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
     Returns:
         None, but produces:
         - Comparative bar charts saved as {param_name}_comparison.png in the base_dir
+        - Comparative loss curve plots saved as {param_name}_loss_curves.png
         - Printed summary tables showing performance statistics for each parameter value
     """
     results = []
@@ -535,34 +537,55 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
     else:
         search_path = base_dir
     
-    # Function to recursively search for result files
-    def find_result_files(directory):
-        found_results = []
+    # Function to recursively search for result and loss files
+    def find_experiment_data(directory):
+        found_data = []
         
         for item in os.listdir(directory):
             item_path = os.path.join(directory, item)
             
             if os.path.isdir(item_path):
-                # Check if this directory contains a results.json file
+                # Check if this directory contains results.json and loss_stats.txt
                 results_file = os.path.join(item_path, "results.json")
-                if os.path.exists(results_file):
-                    # If it does, load the results
+                loss_file = os.path.join(item_path, "loss_stats.txt")
+                
+                if os.path.exists(results_file) and os.path.exists(loss_file):
+                    # Load results
                     with open(results_file, "r") as f:
                         result = json.load(f)
+                        
+                    # Load loss data
+                    loss_data = {'total_steps': [], 'policy_loss': [], 'value_loss': []}
+                    try:
+                        with open(loss_file, "r") as f:
+                            lines = f.readlines()
+                            if len(lines) > 1: # Skip header
+                                for line in lines[1:]:
+                                    parts = line.strip().split(',')
+                                    if len(parts) >= 7: # Ensure enough columns
+                                        loss_data['total_steps'].append(int(parts[1]))
+                                        loss_data['policy_loss'].append(float(parts[2]))
+                                        loss_data['value_loss'].append(float(parts[3]))
+                    except Exception as e:
+                        print(f"Warning: Could not parse loss data from {loss_file}: {e}")
+
+                    # Add loss data to the result dictionary
+                    result['loss_curve_data'] = loss_data
+                    
                     # Filter by param_name if specified
                     if param_name is None or result.get("param_name") == param_name:
-                        found_results.append(result)
+                        found_data.append(result)
                 else:
                     # If not, search its subdirectories
-                    found_results.extend(find_result_files(item_path))
+                    found_data.extend(find_experiment_data(item_path))
         
-        return found_results
+        return found_data
     
     if os.path.exists(search_path):
-        results = find_result_files(search_path)
+        results = find_experiment_data(search_path)
     
     if not results:
-        print(f"No results found to analyze in {search_path}")
+        print(f"No complete experiment data (results.json and loss_stats.txt) found to analyze in {search_path}")
         return
     
     # Group results by parameter name
@@ -580,6 +603,9 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
             output_dir = os.path.join(base_dir, p_name, run_dir)
         else:
             output_dir = os.path.join(base_dir, p_name)
+            
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
         
         # Sort by parameter value for plotting
         p_results.sort(key=lambda x: x["param_value"])
@@ -608,53 +634,83 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
         plt.savefig(os.path.join(output_dir, f"{p_name}_reward_comparison.png"))
         plt.close()
         
-        # Loss metrics plots if available
+        # Plot loss curves against steps
+        if any('loss_curve_data' in r and r['loss_curve_data']['total_steps'] for r in p_results):
+            plt.figure(figsize=(12, 10))
+            
+            # Policy Loss plot
+            plt.subplot(2, 1, 1)
+            for result in p_results:
+                if 'loss_curve_data' in result and result['loss_curve_data']['total_steps']:
+                    loss_data = result['loss_curve_data']
+                    plt.plot(loss_data['total_steps'], loss_data['policy_loss'], label=f'Value = {result["param_value"]}')
+            plt.title(f'Policy Loss Curves by {p_name}')
+            plt.xlabel('Total Steps')
+            plt.ylabel('Policy Loss')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            # Value Loss plot
+            plt.subplot(2, 1, 2)
+            for result in p_results:
+                if 'loss_curve_data' in result and result['loss_curve_data']['total_steps']:
+                    loss_data = result['loss_curve_data']
+                    plt.plot(loss_data['total_steps'], loss_data['value_loss'], label=f'Value = {result["param_value"]}')
+            plt.title(f'Value Loss Curves by {p_name}')
+            plt.xlabel('Total Steps')
+            plt.ylabel('Value Loss')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, f"{p_name}_loss_curves_comparison.png"))
+            plt.close()
+        
+        # Loss metrics bar plots (Average losses)
         if all('loss_metrics' in r for r in p_results):
-            # Policy loss
             policy_losses = [r.get('loss_metrics', {}).get('avg_policy_loss', 0) for r in p_results]
             value_losses = [r.get('loss_metrics', {}).get('avg_value_loss', 0) for r in p_results]
-            total_losses = [r.get('loss_metrics', {}).get('avg_total_loss', 0) for r in p_results]
             entropy_values = [r.get('loss_metrics', {}).get('avg_entropy', 0) for r in p_results]
             kl_divergences = [r.get('loss_metrics', {}).get('avg_kl_divergence', 0) for r in p_results]
             
             # Loss comparison plot
             plt.figure(figsize=(10, 6))
-            plt.bar(x - width/2, policy_losses, width, label='Policy Loss')
-            plt.bar(x + width/2, value_losses, width, label='Value Loss')
+            plt.bar(x - width/2, policy_losses, width, label='Avg Policy Loss')
+            plt.bar(x + width/2, value_losses, width, label='Avg Value Loss')
             plt.xlabel(f'{p_name} Value')
             plt.ylabel('Average Loss')
-            plt.title(f'Loss Metrics by {p_name}')
+            plt.title(f'Average Loss Metrics by {p_name}')
             plt.xticks(x, values)
             plt.legend()
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f"{p_name}_loss_comparison.png"))
+            plt.savefig(os.path.join(output_dir, f"{p_name}_avg_loss_comparison.png"))
             plt.close()
             
             # Entropy comparison plot
             plt.figure(figsize=(10, 6))
-            plt.bar(x, entropy_values, width, label='Entropy')
+            plt.bar(x, entropy_values, width, label='Avg Entropy')
             plt.xlabel(f'{p_name} Value')
             plt.ylabel('Average Entropy')
-            plt.title(f'Entropy by {p_name}')
+            plt.title(f'Average Entropy by {p_name}')
             plt.xticks(x, values)
             plt.legend()
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f"{p_name}_entropy_comparison.png"))
+            plt.savefig(os.path.join(output_dir, f"{p_name}_avg_entropy_comparison.png"))
             plt.close()
             
             # KL divergence comparison plot
             plt.figure(figsize=(10, 6))
-            plt.bar(x, kl_divergences, width, label='KL Divergence')
+            plt.bar(x, kl_divergences, width, label='Avg KL Divergence')
             plt.xlabel(f'{p_name} Value')
             plt.ylabel('Average KL Divergence')
-            plt.title(f'Policy Update Magnitude by {p_name}')
+            plt.title(f'Average Policy Update Magnitude by {p_name}')
             plt.xticks(x, values)
             plt.legend()
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f"{p_name}_kl_divergence_comparison.png"))
+            plt.savefig(os.path.join(output_dir, f"{p_name}_avg_kl_divergence_comparison.png"))
             plt.close()
         
     # Print summary table
