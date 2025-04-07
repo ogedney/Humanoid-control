@@ -430,7 +430,7 @@ class PPOController(Controller):
         self.episode_height_penalty = 0
         self.episode_energy_penalty = 0
         self.episode_velocity_reward = 0
-        self.episode_orientation_reward = 0  # Changed from penalty to reward
+        self.episode_orientation_penalty = 0  # Changed from orientation_reward to orientation_penalty to match main.py
         
         # For orientation tracking
         self.prev_torso_angle_rad = None
@@ -556,25 +556,25 @@ class PPOController(Controller):
         velocity_reward = 0.1 * abs(forward_velocity)  # Reward for any forward velocity
         self.episode_velocity_reward += velocity_reward
 
-        # Orientation reward based on improvement in torso angle
+        # Orientation penalty based on deviation from the world vertical axis
         # Calculate the squared differences (higher value = worse orientation)
         prev_squared_angle = self.prev_torso_angle_rad ** 2
         current_squared_angle = current_torso_angle_rad ** 2
         
-        # Reward for improvement (reduced squared angle)
-        # If current_squared_angle is smaller than prev_squared_angle, the difference is positive
-        orientation_improvement = prev_squared_angle - current_squared_angle
+        # Penalty for deviation (increased squared angle)
+        # If current_squared_angle is larger than prev_squared_angle, the difference is positive
+        orientation_deviation = current_squared_angle - prev_squared_angle
         
-        # Scale the reward - positive when improving, negative when getting worse
-        orientation_reward = 1600 * orientation_improvement
-        self.episode_orientation_reward += orientation_reward
+        # Scale the penalty - positive when deviating, negative when improving
+        orientation_penalty = 1600 * orientation_deviation
+        self.episode_orientation_penalty += orientation_penalty
         
         # Update previous position and angle
         self.prev_base_pos = current_base_pos
         self.prev_torso_angle_rad = current_torso_angle_rad
         
-        # Combine rewards
-        reward = forward_reward + height_penalty + energy_penalty + velocity_reward + orientation_reward
+        # Combine rewards and penalties
+        reward = forward_reward + height_penalty + energy_penalty + velocity_reward + orientation_penalty
         
         return reward
     
@@ -697,7 +697,7 @@ class PPOController(Controller):
             # Changing this format will break the automated hyperparameter tuning process.
             print(f"Episode {self.episodes} finished with reward {self.episode_reward:.2f} after {self.episode_length} steps")
             # Print reward components
-            print(f"  Reward Breakdown: Fwd={self.episode_forward_reward:.2f}, Hgt={self.episode_height_penalty:.2f}, Eng={self.episode_energy_penalty:.2f}, Vel={self.episode_velocity_reward:.2f}, Ori={self.episode_orientation_reward:.2f} \n")
+            print(f"  Reward Breakdown: Fwd={self.episode_forward_reward:.2f}, Hgt={self.episode_height_penalty:.2f}, Eng={self.episode_energy_penalty:.2f}, Vel={self.episode_velocity_reward:.2f}, Ori={self.episode_orientation_penalty:.2f} \n")
 
             # Save best model
             if self.episode_reward > self.best_reward:
@@ -715,7 +715,7 @@ class PPOController(Controller):
             self.episode_height_penalty = 0
             self.episode_energy_penalty = 0
             self.episode_velocity_reward = 0
-            self.episode_orientation_reward = 0  # Reset orientation reward tracker
+            self.episode_orientation_penalty = 0  # Reset orientation penalty tracker
             self.prev_torso_angle_rad = None  # Reset previous angle
             
             # Reset humanoid position for the next episode

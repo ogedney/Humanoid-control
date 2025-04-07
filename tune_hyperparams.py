@@ -6,78 +6,31 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
+import random
 
 """
-Hyperparameter Tuning Script for PPO Controller
-===============================================
+PPO Hyperparameter Tuning
+========================
 
-This script provides tools to systematically tune hyperparameters for the PPO reinforcement
-learning algorithm by running multiple experiments with different parameter values and
-analyzing the results.
+Systematically tune PPO hyperparameters by running experiments with different parameter values.
 
-Command Line Usage Examples:
----------------------------
+Basic Usage:
+----------
+- List parameters: `python tune_hyperparams.py`
+- Tune parameter: `python tune_hyperparams.py --param learning_rate`
+- Analyze results: `python tune_hyperparams.py --analyze --param learning_rate`
+- Custom directory: `python tune_hyperparams.py --param batch_size --dir custom_results`
 
-1. List available hyperparameters:
-   ```
-   python tune_hyperparams.py
-   ```
+Run Organization:
+---------------
+Experiments are organized in timestamp-based runs:
+- New run: `python tune_hyperparams.py --param learning_rate`
+  Creates: tune_results/learning_rate/run_YYYYMMDD_HHMMSS/
+- Analyze specific run: `python tune_hyperparams.py --analyze --param learning_rate --run run_20250406_102045`
+- Analyze all runs: `python tune_hyperparams.py --analyze --param learning_rate`
 
-2. Tune a specific hyperparameter (e.g., learning_rate):
-   ```
-   python tune_hyperparams.py --param learning_rate
-   ```
-   This will run experiments for all values of learning_rate defined in HYPERPARAMS.
-
-3. Analyze results from previous tuning runs:
-   ```
-   python tune_hyperparams.py --analyze
-   ```
-
-4. Analyze results for a specific parameter only:
-   ```
-   python tune_hyperparams.py --analyze --param learning_rate
-   ```
-
-5. Use a custom directory for results:
-   ```
-   python tune_hyperparams.py --param batch_size --dir custom_results
-   ```
-
-Run-Based Organization:
----------------------
-
-The script now organizes tuning sessions into separate runs, making it easier to compare
-results across different tuning sessions:
-
-1. Run a new tuning session for a parameter:
-   ```
-   python tune_hyperparams.py --param learning_rate
-   ```
-   This creates a new run directory with timestamp: tune_results/learning_rate/run_YYYYMMDD_HHMMSS/
-
-2. Analyze results from a specific run only:
-   ```
-   python tune_hyperparams.py --analyze --param learning_rate --run run_20250406_102045
-   ```
-
-3. Analyze all runs for a specific parameter:
-   ```
-   python tune_hyperparams.py --analyze --param learning_rate
-   ```
-
-4. Organize existing results:
-   When you run a parameter tuning for the first time after updating, any existing
-   experiment files will be automatically moved to a "run1" folder.
-
-Each experiment will:
-- Run until reaching stability criteria or minimum requirements
-- Generate plots of rewards and episode lengths
-- Save detailed statistics for later analysis
-- Automatically stop when the performance stabilizes
-
-After all experiments complete, a comparative analysis showing the best parameter
-values will be generated.
+Experiments automatically stop when performance stabilizes, generating comparative analysis
+plots and summary statistics to identify optimal parameter values.
 """
 
 # Define hyperparameter ranges to test
@@ -158,11 +111,19 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     
     # Use provided run_dir if specified, otherwise use timestamp directly
     if run_dir:
+        # When run_dir is provided, it means we're inside a run directory already
+        # So we should create param_value_timestamp inside that run directory
         experiment_dir = os.path.join(base_dir, f"{param_value}_{timestamp}")
     else:
+        # Without run_dir, use the old format - this case shouldn't happen with the updated code
         experiment_dir = os.path.join(base_dir, f"{param_name}_{param_value}_{timestamp}")
     
     os.makedirs(experiment_dir, exist_ok=True)
+    
+    # CRITICAL: Create a simplified experiment directory for main.py
+    # main.py might have issues with deeply nested directories
+    main_experiment_dir = os.path.join(experiment_dir, "experiment_data")
+    os.makedirs(main_experiment_dir, exist_ok=True)
     
     # Save configuration
     config = {
@@ -177,9 +138,14 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     with open(os.path.join(experiment_dir, "config.json"), "w") as f:
         json.dump(config, f, indent=2)
     
-    # Create model directory within experiment directory
-    model_dir = os.path.join(experiment_dir, "ppo_models")
+    # Create model directory within main experiment directory
+    model_dir = os.path.join(main_experiment_dir, "ppo_models")
     os.makedirs(model_dir, exist_ok=True)
+    
+    # Create a marker file to check if the process started correctly
+    marker_file = os.path.join(experiment_dir, "process_started.txt")
+    with open(marker_file, "w") as f:
+        f.write("Process started\n")
     
     # Set up stats tracking file
     stats_file = os.path.join(experiment_dir, "training_stats.txt")
@@ -202,8 +168,8 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     
     print(f"Starting experiment with {param_name}={param_value}{progress_info}")
     
-    # Set up command with --new-model to start fresh and include seed
-    cmd = ["python", "main.py", "--new-model", "--experiment-dir", experiment_dir, "--seed", str(seed)]
+    # Set up command with --new-model to start fresh, using the simplified experiment directory
+    cmd = ["python", "main.py", "--new-model", "--experiment-dir", main_experiment_dir, "--seed", str(seed)]
     
     # Add --no-gui flag if GUI is disabled
     if not use_gui:
@@ -214,14 +180,29 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     last_update_time = start_time
     update_interval = 15  # Show update every 15 seconds
     
-    process = subprocess.Popen(
-        cmd, 
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
+    try:
+        print(f"Running command: {' '.join(cmd)}")
+        process = subprocess.Popen(
+            cmd, 
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+    except Exception as e:
+        print(f"Error starting process: {e}")
+        return {
+            "param_name": param_name,
+            "param_value": param_value,
+            "episodes": 0,
+            "total_steps": 0,
+            "mean_reward": 0,
+            "std_reward": 0,
+            "max_reward": 0,
+            "mean_episode_length": 0,
+            "error": str(e)
+        }
     
     # Track stats
     episodes = 0
@@ -241,14 +222,42 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
     }
     training_iter = 0
     
+    # Create a debug log file to capture all output
+    debug_log_path = os.path.join(experiment_dir, "debug_output.log")
+    with open(debug_log_path, "w") as debug_log:
+        debug_log.write(f"Command: {' '.join(cmd)}\n\n")
+        debug_log.write("Output:\n")
+    
     # Monitor the process output
     try:
+        start_check_time = time.time()
+        process_started = False
+        
         while True:
             line = process.stdout.readline()
             if not line and process.poll() is not None:
                 break
             
+            # Log all output to the debug file
+            with open(debug_log_path, "a") as debug_log:
+                debug_log.write(line)
+            
             # Only parse the output, don't print everything to terminal
+            
+            # Check if process started correctly
+            if not process_started:
+                # Display first few lines to help with debugging
+                print(f"Output: {line.strip()}")
+                
+                # If we've waited more than 30 seconds and no output, check if the process is still running
+                if time.time() - start_check_time > 30:
+                    if process.poll() is not None:
+                        print(f"Process exited with code {process.poll()} before producing output")
+                        break
+                    else:
+                        # Process is still running but no output - mark as started anyway
+                        process_started = True
+                        print("Process is running but not producing output - continuing")
             
             # Format periodic status updates
             current_time = time.time()
@@ -272,47 +281,67 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
             # Parse episode completion lines
             if "Episode" in line and "finished with reward" in line:
                 try:
-                    # Extract episode number, reward, and steps
-                    parts = line.split()
-                    episode_num = int(parts[1])
-                    reward = float(parts[5])
-                    length = int(parts[7])
+                    # Extract episode number, reward, and steps using regex for more robustness
+                    import re
+                    number_pattern = r'[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?'
                     
-                    episodes = max(episodes, episode_num + 1)  # +1 because episodes are 0-indexed
-                    steps += length
-                    rewards.append(reward)
-                    episode_lengths.append(length)
+                    # Extract numbers using regex instead of specific positions (use raw strings for regex)
+                    episode_match = re.search(r'Episode\s+(\d+)', line)
+                    reward_match = re.search(r'reward\s+({})'.format(number_pattern), line)
+                    steps_match = re.search(r'after\s+(\d+)', line)
                     
-                    # Log to stats file
-                    with open(stats_file, "a") as f:
-                        f.write(f"{episode_num},{reward},{length},{steps}\n")
-                    
-                    # Check if we've run long enough
-                    if episodes >= min_episodes and steps >= min_steps:
-                        # Check for stability in rewards
-                        if len(rewards) >= STABILITY_WINDOW:
-                            recent_rewards = rewards[-STABILITY_WINDOW:]
-                            mean_reward = np.mean(recent_rewards)
-                            if mean_reward != 0:  # Avoid division by zero
-                                std_reward = np.std(recent_rewards)
-                                cv = std_reward / abs(mean_reward)  # Coefficient of variation
-                                
-                                if cv < STABILITY_THRESHOLD:
-                                    print(f"Training stabilized after {episodes} episodes, stopping")
-                                    break
+                    if episode_match and reward_match and steps_match:
+                        episode_num = int(episode_match.group(1))
+                        reward = float(reward_match.group(1))
+                        length = int(steps_match.group(1))
+                        
+                        process_started = True  # Mark as started if we've processed an episode
+                        
+                        episodes = max(episodes, episode_num + 1)  # +1 because episodes are 0-indexed
+                        steps += length
+                        rewards.append(reward)
+                        episode_lengths.append(length)
+                        
+                        # Log to stats file
+                        with open(stats_file, "a") as f:
+                            f.write(f"{episode_num},{reward},{length},{steps}\n")
+                        
+                        # Check if we've run long enough
+                        if episodes >= min_episodes and steps >= min_steps:
+                            # Check for stability in rewards
+                            if len(rewards) >= STABILITY_WINDOW:
+                                recent_rewards = rewards[-STABILITY_WINDOW:]
+                                mean_reward = np.mean(recent_rewards)
+                                if mean_reward != 0:  # Avoid division by zero
+                                    std_reward = np.std(recent_rewards)
+                                    cv = std_reward / abs(mean_reward)  # Coefficient of variation
+                                    
+                                    if cv < STABILITY_THRESHOLD:
+                                        print(f"Training stabilized after {episodes} episodes, stopping")
+                                        break
+                    else:
+                        print(f"Warning: Could not parse episode line format: {line.strip()}")
+                        print(f"Matches found: episode={bool(episode_match)}, reward={bool(reward_match)}, steps={bool(steps_match)}")
                 except Exception as e:
-                    print(f"Error parsing output: {e}")
+                    print(f"Error parsing episode output: {e}")
+                    print(f"Raw line: {line.strip()}")
             
             # Parse loss data lines
             if "LOSS_DATA:" in line:
                 try:
-                    # Extract loss values using regex
+                    # Extract loss values using regex with more robust number pattern
+                    # Pattern matches any number format including scientific notation and negative numbers
                     import re
-                    policy_loss = float(re.search(r'policy_loss=(\d+\.\d+)', line).group(1))
-                    value_loss = float(re.search(r'value_loss=(\d+\.\d+)', line).group(1))
-                    entropy = float(re.search(r'entropy=(\d+\.\d+)', line).group(1))
-                    total_loss = float(re.search(r'total_loss=(\d+\.\d+)', line).group(1))
-                    kl_divergence = float(re.search(r'kl_divergence=(\d+\.\d+)', line).group(1))
+                    number_pattern = r'[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?'
+                    
+                    process_started = True  # Mark as started if we've processed loss data
+                    
+                    # Use string format instead of f-strings with raw patterns
+                    policy_loss = float(re.search(r'policy_loss=({})'.format(number_pattern), line).group(1))
+                    value_loss = float(re.search(r'value_loss=({})'.format(number_pattern), line).group(1))
+                    entropy = float(re.search(r'entropy=({})'.format(number_pattern), line).group(1))
+                    total_loss = float(re.search(r'total_loss=({})'.format(number_pattern), line).group(1))
+                    kl_divergence = float(re.search(r'kl_divergence=({})'.format(number_pattern), line).group(1))
                     
                     training_iter += 1
                     
@@ -331,17 +360,40 @@ def run_experiment(param_name, param_value, base_dir="tune_results",
                     
                 except Exception as e:
                     print(f"Error parsing loss data: {e}")
+                    print(f"Raw line: {line.strip()}")
                     
     except KeyboardInterrupt:
         print("Interrupted by user")
     finally:
         # Terminate the process if it's still running
         if process.poll() is None:
+            print("Terminating process...")
             process.terminate()
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                print("Process did not terminate gracefully, force killing...")
                 process.kill()
+    
+    # Check for empty results (process didn't run properly)
+    if not process_started and not rewards:
+        print(f"Warning: Process didn't produce any valid output. Check if main.py is running correctly.")
+        print(f"Command used: {' '.join(cmd)}")
+        print(f"Debug log saved to: {debug_log_path}")
+    
+    # Copy model files from the simplified experiment directory back to our experiment directory
+    try:
+        import shutil
+        model_files = os.listdir(os.path.join(main_experiment_dir, "ppo_models"))
+        for model_file in model_files:
+            src = os.path.join(main_experiment_dir, "ppo_models", model_file)
+            dst = os.path.join(experiment_dir, "ppo_models", model_file)
+            # Make sure the destination directory exists
+            os.makedirs(os.path.join(experiment_dir, "ppo_models"), exist_ok=True)
+            shutil.copy2(src, dst)
+        print(f"Copied {len(model_files)} model files from {main_experiment_dir}/ppo_models to {experiment_dir}/ppo_models")
+    except Exception as e:
+        print(f"Error copying model files: {e}")
     
     # Show final stats
     elapsed_seconds = int(time.time() - start_time)
@@ -729,7 +781,8 @@ def tune_single_param(param_name, base_dir="tune_results", use_gui=False, seed=D
     # Run experiments for each value
     results = []
     for i, value in enumerate(values):
-        result = run_experiment(param_name, value, run_path, use_gui=use_gui, 
+        # Pass run_path as the base_dir so experiments are created inside the run directory
+        result = run_experiment(param_name, value, base_dir=run_path, use_gui=use_gui, 
                                value_index=i+1, total_values=total_values, seed=seed)
         results.append(result)
         
@@ -738,9 +791,141 @@ def tune_single_param(param_name, base_dir="tune_results", use_gui=False, seed=D
     
     return results
 
+def run_multiple_values(param_name, param_values, base_dir="tune_results", 
+                        min_episodes=MIN_EPISODES, min_steps=MIN_STEPS, use_gui=False,
+                        run_index=None):
+    """
+    Run experiments for multiple parameter values and compare results.
+    
+    Args:
+        param_name: Name of the parameter to tune
+        param_values: List of values to test for the parameter
+        base_dir: Base directory for saving results
+        min_episodes: Minimum number of episodes to run for each value
+        min_steps: Minimum number of steps to run for each value
+        use_gui: Whether to show the GUI during simulation
+        run_index: Optional run index number to use (instead of timestamp)
+    
+    Returns:
+        Dictionary containing results for each parameter value
+    """
+    if run_index is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = f"run_{timestamp}"
+    else:
+        run_dir = f"run{run_index}"
+    
+    # Create parameter-specific results directory with run subdirectory
+    param_dir = os.path.join(base_dir, param_name)
+    run_path = os.path.join(param_dir, run_dir)
+    os.makedirs(run_path, exist_ok=True)
+    
+    # Move existing files to run1 if they exist and this is a new run
+    if run_index is None:
+        move_existing_files(param_dir)
+    
+    # Write experiment config
+    config = {
+        "param_name": param_name,
+        "param_values": param_values,
+        "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "min_episodes": min_episodes,
+        "min_steps": min_steps,
+        "use_gui": use_gui
+    }
+    
+    with open(os.path.join(run_path, "experiment_config.json"), "w") as f:
+        json.dump(config, f, indent=2)
+    
+    # Generate seeds for each experiment for better comparison
+    seeds = [random.randint(1, 10000) for _ in range(len(param_values))]
+    
+    # Run experiments for each parameter value
+    results = []
+    for i, value in enumerate(param_values):
+        # Use the same random seed for all experiments for fair comparison
+        seed = seeds[0]  # Use the same seed for all values
+        
+        # Set value index for progress reporting
+        value_index = i + 1
+        total_values = len(param_values)
+        
+        # Run experiment in the run directory
+        result = run_experiment(
+            param_name=param_name,
+            param_value=value,
+            base_dir=run_path,  # Use run_path as the base directory
+            min_episodes=min_episodes,
+            min_steps=min_steps,
+            use_gui=use_gui,
+            value_index=value_index,
+            total_values=total_values,
+            seed=seed,
+            run_dir=run_path  # Pass run_dir to indicate it's part of a multi-experiment run
+        )
+        
+        results.append(result)
+    
+    # Save combined results
+    combined_results = {
+        "param_name": param_name,
+        "results": results
+    }
+    
+    with open(os.path.join(run_path, "combined_results.json"), "w") as f:
+        json.dump(combined_results, f, indent=2)
+    
+    # Create comparative visualizations
+    create_comparison_visualizations(results, param_name, run_path)
+    
+    # Print summary table
+    print("\nResults Summary:")
+    print("-" * 80)
+    print(f"Parameter: {param_name}")
+    print("-" * 80)
+    headers = ["Value", "Episodes", "Steps", "Mean Reward", "Max Reward", "Entropy", "KL Div"]
+    rows = []
+    
+    for result in results:
+        value = result["param_value"]
+        episodes = result["episodes"]
+        steps = result["total_steps"]
+        mean_reward = result["mean_reward"]
+        max_reward = result["max_reward"]
+        
+        # Check if we have loss data
+        if "avg_entropy" in result:
+            entropy = f"{result['avg_entropy']:.4f}"
+        else:
+            entropy = "N/A"
+            
+        if "avg_kl_divergence" in result:
+            kl_div = f"{result['avg_kl_divergence']:.6f}"
+        else:
+            kl_div = "N/A"
+        
+        rows.append([value, episodes, steps, f"{mean_reward:.2f}", f"{max_reward:.2f}", entropy, kl_div])
+    
+    # Format and print table
+    col_widths = [max(len(str(row[i])) for row in rows + [headers]) for i in range(len(headers))]
+    
+    # Print headers
+    header_row = " | ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers))
+    print(header_row)
+    print("-" * len(header_row))
+    
+    # Print data rows
+    for row in rows:
+        formatted_row = " | ".join(str(cell).ljust(col_widths[i]) for i, cell in enumerate(row))
+        print(formatted_row)
+    
+    print("-" * 80)
+    
+    return combined_results
+
 def main():
     """
-    Main entry point for the hyperparameter tuning script.
+    Main entry point for hyperparameter tuning script.
     
     This function:
     1. Parses command-line arguments to determine the operation mode
@@ -752,11 +937,14 @@ def main():
     
     Command-line Arguments:
         --param (str): Parameter name to tune
-        --analyze (flag): Analyze existing results without running new experiments
+        --analyze (flag): Analyze existing results
         --dir (str): Results directory (default: "tune_results")
         --gui (flag): Enable GUI visualization (disabled by default for faster training)
+        --no-gui (flag): Disable GUI visualization (default)
         --seed (int): Random seed for reproducible experiments (default: 42)
         --run (str): Specific run directory to analyze (for --analyze)
+        --test (flag): Run in quick test mode with minimal episodes/steps
+        --value (float): Single value to test (used with --test)
     
     Using from Python code:
         # Tune a specific parameter
@@ -805,10 +993,20 @@ def main():
     parser.add_argument("--analyze", action="store_true", help="Analyze existing results")
     parser.add_argument("--dir", type=str, default="tune_results", help="Results directory")
     parser.add_argument("--gui", action="store_true", help="Enable GUI visualization")
+    parser.add_argument("--no-gui", action="store_true", help="Disable GUI visualization (default)")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed for reproducible experiments")
     parser.add_argument("--run", type=str, help="Specific run directory to analyze (for --analyze)")
+    parser.add_argument("--test", action="store_true", help="Run in quick test mode with minimal episodes/steps")
+    parser.add_argument("--value", type=float, help="Single value to test (used with --test)")
     
     args = parser.parse_args()
+    
+    # Validate arguments
+    if args.gui and args.no_gui:
+        parser.error("Cannot specify both --gui and --no-gui")
+        
+    # Determine GUI setting (default is no GUI)
+    use_gui = args.gui and not args.no_gui
     
     # Create base results directory
     os.makedirs(args.dir, exist_ok=True)
@@ -816,9 +1014,32 @@ def main():
     if args.analyze:
         # Just analyze existing results
         analyze_results(args.dir, args.param, args.run)
+    elif args.param and args.test:
+        # Test mode for quick testing of a single value
+        if args.value is None:
+            # Use first value in the list if not specified
+            value = HYPERPARAMS[args.param][0]
+            print(f"No value specified, using first value in list: {value}")
+        else:
+            value = args.value
+        
+        print(f"TESTING MODE: Running quick test for {args.param}={value}")
+        result = run_experiment(
+            param_name=args.param,
+            param_value=value,
+            base_dir=os.path.join(args.dir, "test"),
+            min_episodes=1,  # Very minimal for testing
+            min_steps=100,   # Very minimal for testing
+            use_gui=use_gui,  # Use the determined GUI setting
+            seed=args.seed
+        )
+        print("\nTest Results:")
+        print(f"Parameter: {args.param}, Value: {value}")
+        print(f"Episodes: {result['episodes']}, Steps: {result['total_steps']}")
+        print(f"Mean Reward: {result['mean_reward']:.2f}, Max Reward: {result['max_reward']:.2f}")
     elif args.param:
         # Tune a specific parameter
-        tune_single_param(args.param, args.dir, use_gui=args.gui, seed=args.seed)
+        tune_single_param(args.param, args.dir, use_gui=use_gui, seed=args.seed)
     else:
         # Show available parameters
         print("Available hyperparameters:")
@@ -826,6 +1047,9 @@ def main():
             print(f"  {param}: {values}")
         print("\nUse --param to specify which one to tune")
         print("Add --gui to enable visualization (slower but helpful for debugging)")
+        print("Add --no-gui to disable visualization (default)")
+        print("Add --test for a quick test run with minimal episodes/steps")
+        print("Add --value to specify a single value to test (requires --test)")
         print(f"Default seed value: {DEFAULT_SEED} (use --seed to change)")
         print("Use --run to specify a specific run directory when analyzing results")
 
