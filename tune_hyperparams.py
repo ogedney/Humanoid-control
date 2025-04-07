@@ -847,12 +847,12 @@ def tune_single_param(param_name, base_dir="tune_results", use_gui=False, seed=D
     
     return results
 
-def run_multiple_values(param_name, param_values, base_dir="tune_results", 
+def run_multiple_values(param_name, param_values, base_dir="tune_results",
                         min_episodes=MIN_EPISODES, min_steps=MIN_STEPS, use_gui=False,
                         run_index=None):
     """
     Run experiments for multiple parameter values and compare results.
-    
+
     Args:
         param_name: Name of the parameter to tune
         param_values: List of values to test for the parameter
@@ -861,7 +861,7 @@ def run_multiple_values(param_name, param_values, base_dir="tune_results",
         min_steps: Minimum number of steps to run for each value
         use_gui: Whether to show the GUI during simulation
         run_index: Optional run index number to use (instead of timestamp)
-    
+
     Returns:
         Dictionary containing results for each parameter value
     """
@@ -870,16 +870,16 @@ def run_multiple_values(param_name, param_values, base_dir="tune_results",
         run_dir = f"run_{timestamp}"
     else:
         run_dir = f"run{run_index}"
-    
+
     # Create parameter-specific results directory with run subdirectory
     param_dir = os.path.join(base_dir, param_name)
     run_path = os.path.join(param_dir, run_dir)
     os.makedirs(run_path, exist_ok=True)
-    
+
     # Move existing files to run1 if they exist and this is a new run
     if run_index is None:
         move_existing_files(param_dir)
-    
+
     # Write experiment config
     config = {
         "param_name": param_name,
@@ -889,23 +889,23 @@ def run_multiple_values(param_name, param_values, base_dir="tune_results",
         "min_steps": min_steps,
         "use_gui": use_gui
     }
-    
+
     with open(os.path.join(run_path, "experiment_config.json"), "w") as f:
         json.dump(config, f, indent=2)
-    
+
     # Generate seeds for each experiment for better comparison
     seeds = [random.randint(1, 10000) for _ in range(len(param_values))]
-    
+
     # Run experiments for each parameter value
     results = []
     for i, value in enumerate(param_values):
         # Use the same random seed for all experiments for fair comparison
         seed = seeds[0]  # Use the same seed for all values
-        
+
         # Set value index for progress reporting
         value_index = i + 1
         total_values = len(param_values)
-        
+
         # Run experiment in the run directory
         result = run_experiment(
             param_name=param_name,
@@ -919,64 +919,64 @@ def run_multiple_values(param_name, param_values, base_dir="tune_results",
             seed=seed,
             run_dir=run_path  # Pass run_dir to indicate it's part of a multi-experiment run
         )
-        
+
         results.append(result)
-    
+
     # Save combined results
     combined_results = {
         "param_name": param_name,
         "results": results
     }
-    
+
     with open(os.path.join(run_path, "combined_results.json"), "w") as f:
         json.dump(combined_results, f, indent=2)
-    
-    # Create comparative visualizations
-    create_comparison_visualizations(results, param_name, run_path)
-    
-    # Print summary table
-    print("\nResults Summary:")
+
+    # Analyze results for this specific run
+    analyze_results(base_dir, param_name, run_dir)
+
+    # Print summary table (already included in analyze_results, but kept here for clarity if needed)
+    print("\nResults Summary (from run_multiple_values):")
     print("-" * 80)
-    print(f"Parameter: {param_name}")
+    print(f"Parameter: {param_name} (Run: {run_dir})")
     print("-" * 80)
     headers = ["Value", "Episodes", "Steps", "Mean Reward", "Max Reward", "Entropy", "KL Div"]
     rows = []
-    
+
+    # Sort results by value for consistent table output
+    results.sort(key=lambda x: x['param_value'])
+
     for result in results:
         value = result["param_value"]
         episodes = result["episodes"]
         steps = result["total_steps"]
         mean_reward = result["mean_reward"]
         max_reward = result["max_reward"]
-        
-        # Check if we have loss data
-        if "avg_entropy" in result:
-            entropy = f"{result['avg_entropy']:.4f}"
-        else:
-            entropy = "N/A"
-            
-        if "avg_kl_divergence" in result:
-            kl_div = f"{result['avg_kl_divergence']:.6f}"
-        else:
-            kl_div = "N/A"
-        
+
+        # Check if we have loss data (access via loss_metrics)
+        metrics = result.get('loss_metrics', {})
+        entropy = f"{metrics.get('avg_entropy', 0):.4f}" if 'avg_entropy' in metrics else "N/A"
+        kl_div = f"{metrics.get('avg_kl_divergence', 0):.6f}" if 'avg_kl_divergence' in metrics else "N/A"
+
         rows.append([value, episodes, steps, f"{mean_reward:.2f}", f"{max_reward:.2f}", entropy, kl_div])
-    
+
     # Format and print table
-    col_widths = [max(len(str(row[i])) for row in rows + [headers]) for i in range(len(headers))]
-    
-    # Print headers
-    header_row = " | ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers))
-    print(header_row)
-    print("-" * len(header_row))
-    
-    # Print data rows
-    for row in rows:
-        formatted_row = " | ".join(str(cell).ljust(col_widths[i]) for i, cell in enumerate(row))
-        print(formatted_row)
-    
+    if rows:
+        col_widths = [max(len(str(row[i])) for row in rows + [headers]) for i in range(len(headers))]
+
+        # Print headers
+        header_row = " | ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers))
+        print(header_row)
+        print("-" * len(header_row))
+
+        # Print data rows
+        for row in rows:
+            formatted_row = " | ".join(str(cell).ljust(col_widths[i]) for i, cell in enumerate(row))
+            print(formatted_row)
+    else:
+        print("No results to display in the table.")
+
     print("-" * 80)
-    
+
     return combined_results
 
 def main():

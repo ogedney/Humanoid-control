@@ -305,12 +305,13 @@ class PPOController(Controller):
     """
     PPO-based controller for humanoid walking using torque control.
     """
-    def __init__(self, robot_id, joint_indices, joint_names, max_force=20.0, 
-                 hidden_dim=256, learning_rate=3e-4, batch_size=64, 
-                 clip_param=0.2, gamma=0.99, lambd=0.95, 
+    def __init__(self, robot_id, joint_indices, joint_names, max_force=20.0,
+                 hidden_dim=256, learning_rate=3e-4, batch_size=64,
+                 clip_param=0.2, gamma=0.99, lambd=0.95,
                  value_coef=0.5, entropy_coef=0.01, max_buffer_size=4000,
                  model_dir="ppo_models", skip_load=False, joint_max_forces=None,
-                 train_interval=4000, seed=None):
+                 train_interval=4000, seed=None,
+                 load_model_path=None, run_only=False):
         """
         Initialize the PPO controller.
         
@@ -329,10 +330,14 @@ class PPOController(Controller):
             entropy_coef: Entropy coefficient
             max_buffer_size: Maximum size of the experience buffer
             model_dir: Directory to save models
-            skip_load: If True, start with a fresh model instead of loading existing one
+            skip_load: If True, start with a fresh model instead of loading existing one.
+                     Ignored if load_model_path is provided.
             joint_max_forces: List of maximum forces for each joint. If None, max_force is used for all joints.
-            train_interval: Number of steps between training updates
-            seed: Random seed for reproducible network initialization (None for random)
+            train_interval: Number of steps between training updates.
+            seed: Random seed for reproducible network initialization (None for random).
+            load_model_path (str, optional): Path to a specific model file (.pt) to load.
+                                            Overrides model_dir and skip_load for loading.
+            run_only (bool, optional): If True, disable training and saving. Requires load_model_path.
         """
         super().__init__(robot_id, joint_indices, joint_names)
         # Increase max force significantly for more movement
@@ -394,27 +399,36 @@ class PPOController(Controller):
         self.network = PPONetwork(self.state_dim, self.action_dim, hidden_dim).to(self.device)
         self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
         
-        # Experience buffer for training
-        self.buffers = {
-            'states': deque(maxlen=max_buffer_size),
-            'actions': deque(maxlen=max_buffer_size),
-            'rewards': deque(maxlen=max_buffer_size),
-            'values': deque(maxlen=max_buffer_size),
-            'log_probs': deque(maxlen=max_buffer_size),
-            'dones': deque(maxlen=max_buffer_size),
-        }
+        # Experience buffer for training (only needed if not run_only)
+        self.buffers = None
+        if not run_only:
+             self.buffers = {
+                  'states': deque(maxlen=max_buffer_size),
+                  'actions': deque(maxlen=max_buffer_size),
+                  'rewards': deque(maxlen=max_buffer_size),
+                  'values': deque(maxlen=max_buffer_size),
+                  'log_probs': deque(maxlen=max_buffer_size),
+                  'dones': deque(maxlen=max_buffer_size),
+             }
         
         # Training and episode tracking
         self.episodes = 0
         self.steps = 0
         self.train_interval = train_interval  # Steps between training updates
-        self.model_dir = model_dir
+        self.model_dir = model_dir # Directory for saving (if not run_only)
         self.last_train_time = time.time()
         self.training_time = 0
         self.training_iterations = 0
+        self.run_only = run_only # Store the run_only flag
         
-        # Create model directory if it doesn't exist
-        os.makedirs(model_dir, exist_ok=True)
+        # Create model directory if it doesn't exist and saving is enabled
+        if self.model_dir and not self.run_only:
+             os.makedirs(model_dir, exist_ok=True)
+        elif not self.model_dir and not self.run_only and not load_model_path:
+             # Default model dir if none specified and not run_only/loading specific path
+             self.model_dir = "ppo_models"
+             os.makedirs(self.model_dir, exist_ok=True)
+
         
         # For reward calculation
         self.prev_base_pos = None
@@ -435,11 +449,20 @@ class PPOController(Controller):
         # For orientation tracking
         self.prev_torso_angle_rad = None
         
-        # Load model if it exists and skip_load is False
-        if not skip_load:
-            self.load_model()
+        # Load model logic
+        if load_model_path:
+            print(f"Attempting to load specific model from: {load_model_path}")
+            self.load_model(specific_path=load_model_path)
+        elif not skip_load:
+            print(f"Attempting to load model from directory: {self.model_dir}")
+            self.load_model() # Load from default directory (best or checkpoint)
         else:
             print("Starting with fresh model")
+            
+        # If run_only, switch network to evaluation mode
+        if self.run_only:
+             print("Run-only mode enabled: Setting network to evaluation mode.")
+             self.network.eval()
         
     def get_state(self):
         """
@@ -640,7 +663,7 @@ class PPOController(Controller):
     
     def update(self):
         """
-        Apply the policy and update the experience buffer.
+        Apply the policy. If not run_only, also update the experience buffer and potentially train.
         """
         # Get current state
         state = self.get_state()
@@ -662,27 +685,22 @@ class PPOController(Controller):
                 print(f"ERROR at joint {joint_idx}: {e}")
                 continue
         
-        # Compute reward
+        # Compute reward (still useful for tracking/logging even in run_only)
         reward = self.compute_reward()
         self.episode_reward += reward
         self.episode_length += 1
         
-        # --- Debug: Print torso angle ---
-        # current_torso_angle_rad = self._get_torso_angle()
-        # current_torso_angle_deg = np.degrees(current_torso_angle_rad) # Use np.degrees for clarity
-        # print(f"Step {self.steps}: Torso Angle (Deg): {current_torso_angle_deg:.2f}")
-        # --- End Debug ---
-        
         # Check if episode is done
         done = self.has_fallen()
         
-        # Store experience in buffer
-        self.buffers['states'].append(state)
-        self.buffers['actions'].append(action.cpu().numpy())
-        self.buffers['rewards'].append(reward)
-        self.buffers['values'].append(value)
-        self.buffers['log_probs'].append(log_prob.item())
-        self.buffers['dones'].append(done)
+        # Store experience in buffer only if training is enabled
+        if not self.run_only and self.buffers is not None:
+            self.buffers['states'].append(state)
+            self.buffers['actions'].append(action.cpu().numpy())
+            self.buffers['rewards'].append(reward)
+            self.buffers['values'].append(value)
+            self.buffers['log_probs'].append(log_prob.item())
+            self.buffers['dones'].append(done)
         
         self.steps += 1
         
@@ -699,10 +717,11 @@ class PPOController(Controller):
             # Print reward components
             print(f"  Reward Breakdown: Fwd={self.episode_forward_reward:.2f}, Hgt={self.episode_height_penalty:.2f}, Eng={self.episode_energy_penalty:.2f}, Vel={self.episode_velocity_reward:.2f}, Ori={self.episode_orientation_penalty:.2f} \n")
 
-            # Save best model
-            if self.episode_reward > self.best_reward:
-                self.best_reward = self.episode_reward
-                self.save_model("best")
+            # Save best model only if training
+            if not self.run_only:
+                if self.episode_reward > self.best_reward:
+                    self.best_reward = self.episode_reward
+                    self.save_model("best") # save_model internally checks if model_dir exists
             
             # Reset episode tracking
             self.episodes += 1
@@ -721,8 +740,8 @@ class PPOController(Controller):
             # Reset humanoid position for the next episode
             reset_humanoid(self.robot_id)
         
-        # Periodically train if buffer has enough samples
-        if self.steps % self.train_interval == 0 and len(self.buffers['states']) >= self.batch_size:
+        # Periodically train only if not run_only and buffer has enough samples
+        if not self.run_only and self.buffers is not None and self.steps % self.train_interval == 0 and len(self.buffers['states']) >= self.batch_size:
             self.train()
             
             # Log training frequency
@@ -731,16 +750,17 @@ class PPOController(Controller):
             self.last_train_time = current_time
             print(f"Training: {elapsed:.2f} seconds since last train, avg training time: {self.training_time/max(1, self.training_iterations):.3f}s")
             
-            # Save checkpoint model
-            self.save_model("checkpoint")
+            # Save checkpoint model (only if training)
+            self.save_model("checkpoint") # save_model internally checks if model_dir exists
     
     def train(self, num_epochs=10):
         """
-        Train the policy using PPO.
-        
-        Args:
-            num_epochs: Number of epochs to train for
+        Train the policy using PPO. No changes needed here, will only be called if not run_only.
         """
+        if self.run_only or self.buffers is None:
+             print("Warning: train() called but run_only is True or buffer is None. Skipping training.")
+             return # Should not happen based on update() logic, but safe guard
+
         if len(self.buffers['states']) < self.batch_size:
             return
             
@@ -900,40 +920,98 @@ class PPOController(Controller):
     
     def save_model(self, tag="checkpoint"):
         """
-        Save the model.
-        
-        Args:
-            tag: Tag to add to the filename
+        Save the model. Only saves if not in run_only mode and model_dir is set.
         """
-        torch.save({
-            'network': self.network.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
-            'episodes': self.episodes,
-            'steps': self.steps,
-            'best_reward': self.best_reward
-        }, os.path.join(self.model_dir, f"ppo_model_{tag}.pt"))
+        if self.run_only:
+            # print("Save skipped: run_only mode is active.")
+            return # Silently skip saving in run_only mode
+        if not self.model_dir:
+             print("Save skipped: model_dir not specified.")
+             return
+
+        save_path = os.path.join(self.model_dir, f"ppo_model_{tag}.pt")
+        try:
+            # Ensure the directory exists just before saving
+            os.makedirs(self.model_dir, exist_ok=True)
+            torch.save({
+                'network': self.network.state_dict(),
+                'optimizer': self.optimizer.state_dict(),
+                'episodes': self.episodes,
+                'steps': self.steps,
+                'best_reward': self.best_reward
+            }, save_path)
+            # print(f"Model saved to {save_path}") # Reduce print frequency
+        except Exception as e:
+             print(f"Error saving model to {save_path}: {e}")
         
-    def load_model(self):
+    def load_model(self, specific_path=None):
         """
-        Load the model if it exists.
+        Load the model. Prioritizes specific_path if provided.
+        Otherwise, tries loading from best or checkpoint in model_dir.
         """
-        checkpoint_path = os.path.join(self.model_dir, "ppo_model_checkpoint.pt")
-        best_path = os.path.join(self.model_dir, "ppo_model_best.pt")
+        path_to_load = None
+        if specific_path:
+            if os.path.exists(specific_path):
+                 path_to_load = specific_path
+            else:
+                 print(f"Error: Specified model path does not exist: {specific_path}")
+                 # Decide whether to raise an error or just warn and continue with fresh model
+                 # For now, warn and continue fresh.
+                 print("Warning: Continuing with a fresh model.")
+                 self.episodes = 0
+                 self.steps = 0
+                 self.best_reward = -float('inf')
+                 return
+        elif self.model_dir:
+            checkpoint_path = os.path.join(self.model_dir, "ppo_model_checkpoint.pt")
+            best_path = os.path.join(self.model_dir, "ppo_model_best.pt")
+            # Prioritize best model if it exists
+            path_to_load = best_path if os.path.exists(best_path) else checkpoint_path
         
-        path_to_load = best_path if os.path.exists(best_path) else checkpoint_path
-        
-        if os.path.exists(path_to_load):
+        if path_to_load and os.path.exists(path_to_load):
             try:
+                print(f"Loading model from {path_to_load}...")
                 checkpoint = torch.load(path_to_load, map_location=self.device)
                 self.network.load_state_dict(checkpoint['network'])
-                self.optimizer.load_state_dict(checkpoint['optimizer'])
-                self.episodes = checkpoint['episodes']
-                self.steps = checkpoint['steps']
-                self.best_reward = checkpoint['best_reward']
-                print(f"Loaded model from {path_to_load}")
-                print(f"Continuing from episode {self.episodes}, steps {self.steps}, best reward {self.best_reward:.2f}")
+                
+                # Load optimizer state only if we are going to train further
+                if not self.run_only and 'optimizer' in checkpoint:
+                     try:
+                          self.optimizer.load_state_dict(checkpoint['optimizer'])
+                     except ValueError as e:
+                          print(f"Warning: Could not load optimizer state, possibly due to changed model structure or learning rate. Optimizer state reset. Error: {e}")
+                     except Exception as e:
+                          print(f"Warning: An unexpected error occurred loading optimizer state: {e}. Optimizer state reset.")
+
+                # Load training progress only if useful (i.e., if continuing training)
+                if not self.run_only:
+                     self.episodes = checkpoint.get('episodes', 0)
+                     self.steps = checkpoint.get('steps', 0)
+                     self.best_reward = checkpoint.get('best_reward', -float('inf'))
+                     print(f"Loaded model from {path_to_load}")
+                     print(f"Continuing from episode {self.episodes}, steps {self.steps}, best reward {self.best_reward:.2f}")
+                else:
+                     # Don't load training progress if run_only
+                     print(f"Loaded network weights from {path_to_load} for run-only mode.")
+                     self.episodes = 0
+                     self.steps = 0
+                     self.best_reward = -float('inf') # Reset reward tracking for run_only
+
+            except KeyError as e:
+                 print(f"Error loading model: Missing key {e} in checkpoint file {path_to_load}. Check if the model file is complete or compatible.")
+                 print("Warning: Continuing with potentially partially loaded or fresh model.")
             except Exception as e:
-                print(f"Error loading model: {e}")
+                print(f"Error loading model from {path_to_load}: {e}")
+                print("Warning: Continuing with a fresh model.")
+                # Reset state if loading failed critically
+                self.episodes = 0
+                self.steps = 0
+                self.best_reward = -float('inf')
+        else:
+             if not specific_path: # Only print if we weren't given a specific (non-existent) path
+                  print(f"No existing model found in {self.model_dir} to load.")
+             # No warning needed if specific_path was given but didn't exist (handled above)
+
 
 def create_controller(controller_type, robot_id, joint_indices, joint_names, **kwargs):
     """
