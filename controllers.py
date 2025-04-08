@@ -588,8 +588,8 @@ class PPOController(Controller):
         # If current_squared_angle is larger than prev_squared_angle, the difference is positive
         orientation_deviation = current_squared_angle - prev_squared_angle
         
-        # Scale the penalty - positive when deviating, negative when improving
-        orientation_penalty = 1600 * orientation_deviation
+        # Scale the penalty - negative when deviating, positive when improving
+        orientation_penalty = - 1600 * orientation_deviation
         self.episode_orientation_penalty += orientation_penalty
         
         # Update previous position and angle

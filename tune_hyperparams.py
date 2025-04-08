@@ -504,11 +504,12 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
     
     This function:
     1. Recursively searches the results directory for experiment results
-    2. Loads and processes all results.json and loss_stats.txt files found
+    2. Loads and processes results.json, loss_stats.txt, and training_stats.txt files found
     3. Groups results by parameter name
     4. Generates comparative bar charts showing mean and max rewards for each parameter value
-    5. Generates line plots comparing policy and value loss curves against total steps
-    6. Prints performance summary tables sorted by mean reward (best first)
+    5. Generates line plots comparing policy/value loss curves against total steps
+    6. Generates line plots comparing episode reward curves against total steps
+    7. Prints performance summary tables sorted by mean reward (best first)
     
     The analysis focuses on comparing different values of the same hyperparameter
     to identify which values led to the best performance and training dynamics.
@@ -521,8 +522,9 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
             
     Returns:
         None, but produces:
-        - Comparative bar charts saved as {param_name}_comparison.png in the base_dir
-        - Comparative loss curve plots saved as {param_name}_loss_curves.png
+        - Comparative reward bar charts saved as {param_name}_reward_comparison.png
+        - Comparative loss curve plots saved as {param_name}_loss_curves_comparison.png
+        - Comparative reward curve plots saved as {param_name}_reward_curves_comparison.png
         - Printed summary tables showing performance statistics for each parameter value
     """
     results = []
@@ -537,7 +539,7 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
     else:
         search_path = base_dir
     
-    # Function to recursively search for result and loss files
+    # Function to recursively search for result, loss and stats files
     def find_experiment_data(directory):
         found_data = []
         
@@ -545,11 +547,12 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
             item_path = os.path.join(directory, item)
             
             if os.path.isdir(item_path):
-                # Check if this directory contains results.json and loss_stats.txt
+                # Check if this directory contains results.json, loss_stats.txt, and training_stats.txt
                 results_file = os.path.join(item_path, "results.json")
                 loss_file = os.path.join(item_path, "loss_stats.txt")
+                stats_file = os.path.join(item_path, "training_stats.txt") # Path to stats file
                 
-                if os.path.exists(results_file) and os.path.exists(loss_file):
+                if os.path.exists(results_file) and os.path.exists(loss_file) and os.path.exists(stats_file):
                     # Load results
                     with open(results_file, "r") as f:
                         result = json.load(f)
@@ -569,8 +572,23 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
                     except Exception as e:
                         print(f"Warning: Could not parse loss data from {loss_file}: {e}")
 
-                    # Add loss data to the result dictionary
+                    # Load reward curve data from training_stats.txt
+                    reward_curve_data = {'steps': [], 'reward': []}
+                    try:
+                        with open(stats_file, "r") as f:
+                            lines = f.readlines()
+                            if len(lines) > 1: # Skip header
+                                for line in lines[1:]:
+                                    parts = line.strip().split(',')
+                                    if len(parts) >= 4: # episode,reward,length,steps
+                                        reward_curve_data['reward'].append(float(parts[1]))
+                                        reward_curve_data['steps'].append(int(parts[3])) # Cumulative steps
+                    except Exception as e:
+                        print(f"Warning: Could not parse reward curve data from {stats_file}: {e}")
+
+                    # Add loss and reward curve data to the result dictionary
                     result['loss_curve_data'] = loss_data
+                    result['reward_curve_data'] = reward_curve_data
                     
                     # Filter by param_name if specified
                     if param_name is None or result.get("param_name") == param_name:
@@ -585,7 +603,7 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
         results = find_experiment_data(search_path)
     
     if not results:
-        print(f"No complete experiment data (results.json and loss_stats.txt) found to analyze in {search_path}")
+        print(f"No complete experiment data (results.json, loss_stats.txt, training_stats.txt) found to analyze in {search_path}")
         return
     
     # Group results by parameter name
@@ -614,7 +632,7 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
         mean_rewards = [r["mean_reward"] for r in p_results]
         max_rewards = [r["max_reward"] for r in p_results]
         
-        # Reward plot
+        # Reward plot (Bar chart of final average/max)
         plt.figure(figsize=(10, 6))
         
         x = np.arange(len(values))
@@ -633,6 +651,22 @@ def analyze_results(base_dir="tune_results", param_name=None, run_dir=None):
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir, f"{p_name}_reward_comparison.png"))
         plt.close()
+        
+        # Plot reward curves against steps
+        if any('reward_curve_data' in r and r['reward_curve_data']['steps'] for r in p_results):
+            plt.figure(figsize=(12, 6))
+            for result in p_results:
+                if 'reward_curve_data' in result and result['reward_curve_data']['steps']:
+                    curve_data = result['reward_curve_data']
+                    plt.plot(curve_data['steps'], curve_data['reward'], label=f'Value = {result["param_value"]}')
+            plt.title(f'Episode Reward vs. Total Steps by {p_name}')
+            plt.xlabel('Total Steps')
+            plt.ylabel('Episode Reward')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, f"{p_name}_reward_curves_comparison.png"))
+            plt.close()
         
         # Plot loss curves against steps
         if any('loss_curve_data' in r and r['loss_curve_data']['total_steps'] for r in p_results):
